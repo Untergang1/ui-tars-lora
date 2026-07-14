@@ -1,0 +1,32 @@
+# Baseline hyperparameters for the first 16-image UI grounding LoRA test.
+# The final launcher maps these values to the exact pinned Qwen entrypoint.
+model_name_or_path: models/UI-TARS-1.5-7B
+dataset_dir: data/processed
+train_file: train.jsonl
+validation_file: validation.jsonl
+output_dir: outputs/avantage-grounding-qlora
+seed: 20260714
+use_4bit_quantization: true
+quant_type: nf4
+compute_dtype: bfloat16
+gradient_checkpointing: true
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+num_train_epochs: 20
+learning_rate: 0.0001
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+logging_steps: 1
+save_strategy: epoch
+evaluation_strategy: epoch
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj

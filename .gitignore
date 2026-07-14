@@ -1,0 +1,19 @@
+# User-provided source material and generated dataset files
+data/raw/
+data/annotations/*.csv
+data/processed/
+
+# Large, reproducible local assets
+models/
+outputs/
+logs/
+.cache/
+
+# Vendored upstream repositories are pinned in SOURCES.md instead
+third_party/
+
+# Python and editor state
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store

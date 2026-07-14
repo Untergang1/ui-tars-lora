@@ -1,0 +1,11 @@
+{
+  "source": "Agent-S gui_agents/s3/agents/grounding.py",
+  "source_commit": "73ea17225bae73ab45d077cc442978d3ff8e286a",
+  "prompt_template": "Query:{description}\nOutput only the coordinate of one point in your response.\n",
+  "coordinate_space": {
+    "width": 1920,
+    "height": 1080
+  },
+  "assistant_response_template": "({x}, {y})",
+  "parser": "first two decimal integer substrings in the model response"
+}
