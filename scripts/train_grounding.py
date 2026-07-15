@@ -15,23 +15,15 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from qwen_vl_utils import process_vision_info
 from torch.utils.data import Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainingArguments
+from training_config import load_training_config
 from xformers_vision import enable_xformers_vision_attention
-
-
-TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-EXCLUDED_MODULES = r"^visual\..*"
 
 
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", type=Path, default=root / "models/UI-TARS-1.5-7B")
-    parser.add_argument("--train", type=Path, default=root / "data/processed/train.jsonl")
-    parser.add_argument("--validation", type=Path, default=root / "data/processed/validation.jsonl")
-    parser.add_argument("--output", type=Path, default=root / "outputs/avantage-grounding-qlora")
-    parser.add_argument("--epochs", type=float, default=20.0)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--seed", type=int, default=20260714)
+    parser.add_argument("--config", type=Path, default=root / "configs/lora_qlora.yaml")
+    parser.add_argument("--print-config", action="store_true", help="Print the resolved YAML configuration and exit")
     return parser.parse_args()
 
 
@@ -73,19 +65,51 @@ class GroundingCollator:
 
 def main() -> None:
     args = parse_args()
-    if not (args.model / "config.json").is_file():
-        raise FileNotFoundError(f"not a local model directory: {args.model}")
-    quantization = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
-    processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
+    try:
+        config = load_training_config(args.config)
+    except ValueError as error:
+        raise SystemExit(f"error: {error}") from error
+    if args.print_config:
+        print(json.dumps(config.as_json(), indent=2))
+        return
+
+    if not (config.model / "config.json").is_file():
+        raise FileNotFoundError(f"not a local model directory: {config.model}")
+    compute_dtype = getattr(torch, config.compute_dtype)
+    quantization = BitsAndBytesConfig(
+        load_in_4bit=config.use_4bit_quantization,
+        bnb_4bit_quant_type=config.quant_type,
+        bnb_4bit_compute_dtype=compute_dtype,
+        bnb_4bit_use_double_quant=True,
+    )
+    processor = AutoProcessor.from_pretrained(config.model, local_files_only=True)
     device_map = "balanced" if len(os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")) > 1 else "auto"
-    model = AutoModelForVision2Seq.from_pretrained(args.model, quantization_config=quantization, torch_dtype=torch.bfloat16, device_map=device_map, local_files_only=True)
+    model = AutoModelForVision2Seq.from_pretrained(config.model, quantization_config=quantization, torch_dtype=compute_dtype, device_map=device_map, local_files_only=True)
     model.config.use_cache = False
     patched_vision_blocks = enable_xformers_vision_attention(model)
     print(f"xformers_vision_blocks={patched_vision_blocks}")
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    # Vision encoder is frozen; checkpointing it needlessly retains multi-gigabyte attention activations.
-    model.visual.gradient_checkpointing = False
-    model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM", target_modules=TARGET_MODULES, exclude_modules=EXCLUDED_MODULES))
+    model = prepare_model_for_kbit_training(
+        model,
+        use_gradient_checkpointing=(
+            config.language_gradient_checkpointing or config.vision_gradient_checkpointing
+        ),
+    )
+    # The vision encoder is frozen and has no LoRA modules; its checkpointing
+    # policy is separate from the language transformer's LoRA backward path.
+    model.model.gradient_checkpointing = config.language_gradient_checkpointing
+    model.visual.gradient_checkpointing = config.vision_gradient_checkpointing
+    model = get_peft_model(
+        model,
+        LoraConfig(
+            r=config.lora_rank,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=config.target_modules,
+            exclude_modules=config.exclude_modules,
+        ),
+    )
     adapted_modules = [name for name, module in model.named_modules() if hasattr(module, "lora_A")]
     visual_adapters = [name for name in adapted_modules if name.startswith("visual.") or ".visual." in name]
     if visual_adapters:
@@ -98,21 +122,26 @@ def main() -> None:
         model.is_parallelizable = True
         model.model_parallel = True
     model.print_trainable_parameters()
-    args.output.mkdir(parents=True, exist_ok=True)
+    config.output.mkdir(parents=True, exist_ok=True)
     training_args = TrainingArguments(
-        output_dir=str(args.output), num_train_epochs=args.epochs, learning_rate=args.learning_rate,
-        per_device_train_batch_size=1, per_device_eval_batch_size=1, gradient_accumulation_steps=8,
-        gradient_checkpointing=False, bf16=True, logging_steps=1, eval_strategy="epoch",
-        save_strategy="epoch", save_total_limit=2, report_to=[], remove_unused_columns=False, seed=args.seed,
+        output_dir=str(config.output), num_train_epochs=config.num_train_epochs, learning_rate=config.learning_rate,
+        per_device_train_batch_size=config.per_device_train_batch_size,
+        per_device_eval_batch_size=config.per_device_eval_batch_size,
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        # Submodule checkpointing is configured above; do not re-enable it globally.
+        gradient_checkpointing=False, bf16=True, logging_steps=config.logging_steps,
+        lr_scheduler_type=config.lr_scheduler_type, warmup_ratio=config.warmup_ratio,
+        eval_strategy=config.evaluation_strategy, save_strategy=config.save_strategy,
+        save_total_limit=config.save_total_limit, report_to=[], remove_unused_columns=False, seed=config.seed,
     )
     trainer = Trainer(
-        model=model, args=training_args, train_dataset=GroundingDataset(args.train),
-        eval_dataset=GroundingDataset(args.validation), data_collator=GroundingCollator(processor),
+        model=model, args=training_args, train_dataset=GroundingDataset(config.train),
+        eval_dataset=GroundingDataset(config.validation), data_collator=GroundingCollator(processor),
     )
     trainer.train()
-    trainer.save_model(str(args.output))
-    processor.save_pretrained(args.output)
-    (args.output / "run_config.json").write_text(json.dumps(vars(args), default=str, indent=2) + "\n", encoding="utf-8")
+    trainer.save_model(str(config.output))
+    processor.save_pretrained(config.output)
+    (config.output / "run_config.json").write_text(json.dumps(config.as_json(), indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -54,12 +54,31 @@ that should not be retained in the training data before adding screenshots.
 3. Create the CSV and images above, then run
    `scripts/prepare_grounding_data.py`.
 4. Create the isolated environment with `scripts/create_environment.sh`.
-5. Run `scripts/run_train.sh` to launch the Qwen2.5-VL-compatible QLoRA
-   baseline on GPU 0. It uses only the local UI-TARS copy and does not contact
-   the network. The public Qwen repository is optional provenance because this
-   host cannot reach GitHub.
+5. Review `configs/lora_qlora.yaml`, then run `scripts/run_train.sh` to launch
+   the Qwen2.5-VL-compatible QLoRA baseline on GPU 0. The YAML file is the
+   single source for training hyperparameters; to run a different experiment,
+   pass a copied YAML file as `scripts/run_train.sh path/to/config.yaml`.
+   It uses only the local UI-TARS copy and does not contact the network. The
+   public Qwen repository is optional provenance because this host cannot reach
+   GitHub.
 6. Evaluate the adapter using a temporary vLLM process on GPU 1 and a local
    loopback port. Never target the production port 18000.
 
 No Git commit is made by these scripts. Set `user.name` and `user.email`
 locally before committing any project changes.
+
+## Training Configuration
+
+`configs/lora_qlora.yaml` controls the model and dataset paths, QLoRA settings,
+optimizer schedule, checkpoint retention, and LoRA targets. It also has
+separate language and vision gradient-checkpointing fields: the baseline keeps
+language checkpointing enabled for LoRA backpropagation and vision checkpointing
+disabled because the vision encoder is frozen and excluded from LoRA. The vision
+attention patch uses xFormers to reduce its forward-pass workspace.
+
+Validate a configuration without loading model weights or training data:
+
+```bash
+/root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
+  scripts/train_grounding.py --config configs/lora_qlora.yaml --print-config
+```
