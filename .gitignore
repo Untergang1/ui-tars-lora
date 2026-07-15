@@ -17,3 +17,6 @@ third_party/
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Local working notes
+record.txt
