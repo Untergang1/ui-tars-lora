@@ -46,7 +46,6 @@ def load_rows(annotations: Path, images_dir: Path) -> list[dict[str, object]]:
         error(f"expected exactly 20 labels for this first test, got {len(rows)}")
 
     seen_ids: set[str] = set()
-    seen_images: set[str] = set()
     validated: list[dict[str, object]] = []
     for row in rows:
         item_id = row["id"].strip()
@@ -56,8 +55,6 @@ def load_rows(annotations: Path, images_dir: Path) -> list[dict[str, object]]:
             error("id, image, and description cannot be empty")
         if item_id in seen_ids:
             error(f"duplicate id: {item_id}")
-        if image_name in seen_images:
-            error(f"duplicate image: {image_name}")
         image_path = (images_dir / image_name).resolve()
         if images_dir.resolve() not in image_path.parents or not image_path.is_file():
             error(f"image must exist inside {images_dir}: {image_name}")
@@ -70,7 +67,6 @@ def load_rows(annotations: Path, images_dir: Path) -> list[dict[str, object]]:
         if not (0 <= x < width and 0 <= y < height):
             error(f"coordinate ({x}, {y}) is outside {image_name} ({width}x{height})")
         seen_ids.add(item_id)
-        seen_images.add(image_name)
         validated.append(
             {
                 "id": item_id,
