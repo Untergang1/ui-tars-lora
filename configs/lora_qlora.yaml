@@ -30,3 +30,4 @@ target_modules:
   - gate_proj
   - up_proj
   - down_proj
+exclude_modules: "^visual\\..*"

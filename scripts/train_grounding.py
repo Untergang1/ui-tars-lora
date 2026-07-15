@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,11 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from qwen_vl_utils import process_vision_info
 from torch.utils.data import Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainingArguments
+from xformers_vision import enable_xformers_vision_attention
 
 
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+EXCLUDED_MODULES = r"^visual\..*"
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,16 +77,32 @@ def main() -> None:
         raise FileNotFoundError(f"not a local model directory: {args.model}")
     quantization = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
-    model = AutoModelForVision2Seq.from_pretrained(args.model, quantization_config=quantization, torch_dtype=torch.bfloat16, device_map="auto", local_files_only=True)
+    device_map = "balanced" if len(os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")) > 1 else "auto"
+    model = AutoModelForVision2Seq.from_pretrained(args.model, quantization_config=quantization, torch_dtype=torch.bfloat16, device_map=device_map, local_files_only=True)
     model.config.use_cache = False
+    patched_vision_blocks = enable_xformers_vision_attention(model)
+    print(f"xformers_vision_blocks={patched_vision_blocks}")
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM", target_modules=TARGET_MODULES))
+    # Vision encoder is frozen; checkpointing it needlessly retains multi-gigabyte attention activations.
+    model.visual.gradient_checkpointing = False
+    model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM", target_modules=TARGET_MODULES, exclude_modules=EXCLUDED_MODULES))
+    adapted_modules = [name for name, module in model.named_modules() if hasattr(module, "lora_A")]
+    visual_adapters = [name for name in adapted_modules if name.startswith("visual.") or ".visual." in name]
+    if visual_adapters:
+        raise RuntimeError(f"visual modules must remain frozen, found LoRA adapters: {visual_adapters[:3]}")
+    if not adapted_modules:
+        raise RuntimeError("no language modules received LoRA adapters")
+    print(f"language_lora_modules={len(adapted_modules)}")
+    if device_map == "balanced":
+        # Keep Trainer in single-process model-parallel mode instead of DDP replication.
+        model.is_parallelizable = True
+        model.model_parallel = True
     model.print_trainable_parameters()
     args.output.mkdir(parents=True, exist_ok=True)
     training_args = TrainingArguments(
         output_dir=str(args.output), num_train_epochs=args.epochs, learning_rate=args.learning_rate,
         per_device_train_batch_size=1, per_device_eval_batch_size=1, gradient_accumulation_steps=8,
-        gradient_checkpointing=True, bf16=True, logging_steps=1, eval_strategy="epoch",
+        gradient_checkpointing=False, bf16=True, logging_steps=1, eval_strategy="epoch",
         save_strategy="epoch", save_total_limit=2, report_to=[], remove_unused_columns=False, seed=args.seed,
     )
     trainer = Trainer(
