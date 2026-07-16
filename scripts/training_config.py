@@ -1,7 +1,8 @@
-"""Validated YAML configuration for the UI-TARS grounding training run."""
+"""Validated per-application YAML configuration for UI-TARS grounding runs."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -10,17 +11,24 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+APP_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """The complete, resolved configuration consumed by ``train_grounding.py``."""
+    """The complete, resolved application configuration consumed by all entrypoints."""
 
     config_path: Path
+    app_id: str
+    data_root: Path
+    annotations: Path
+    images: Path
+    processed: Path
+    split_seed: str
+    validation_fraction: float
     model: Path
-    train: Path
-    validation: Path
-    output: Path
+    output_root: Path
+    run_name: str
     seed: int
     use_4bit_quantization: bool
     quant_type: str
@@ -44,20 +52,53 @@ class TrainingConfig:
     target_modules: list[str]
     exclude_modules: str
 
+    @property
+    def train(self) -> Path:
+        return self.processed / "train.jsonl"
+
+    @property
+    def validation(self) -> Path:
+        return self.processed / "validation.jsonl"
+
+    @property
+    def manifest(self) -> Path:
+        return self.processed / "manifest.json"
+
+    @property
+    def output(self) -> Path:
+        return self.output_root / self.app_id / self.run_name
+
     def as_json(self) -> dict[str, object]:
         """Return a JSON-safe snapshot with all paths fully resolved."""
         values = asdict(self)
-        for key in ("config_path", "model", "train", "validation", "output"):
+        for key in (
+            "config_path",
+            "data_root",
+            "annotations",
+            "images",
+            "processed",
+            "model",
+            "output_root",
+        ):
             values[key] = str(values[key])
+        values["train"] = str(self.train)
+        values["validation"] = str(self.validation)
+        values["manifest"] = str(self.manifest)
+        values["output"] = str(self.output)
         return values
 
 
 REQUIRED_KEYS = {
+    "app_id",
+    "data_root",
+    "annotations_file",
+    "images_dir",
+    "processed_dir",
+    "split_seed",
+    "validation_fraction",
     "model_name_or_path",
-    "dataset_dir",
-    "train_file",
-    "validation_file",
-    "output_dir",
+    "output_root",
+    "run_name",
     "seed",
     "use_4bit_quantization",
     "quant_type",
@@ -85,7 +126,14 @@ REQUIRED_KEYS = {
 
 def _resolve_project_path(value: str) -> Path:
     path = Path(value).expanduser()
-    return path if path.is_absolute() else PROJECT_ROOT / path
+    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+
+def _resolve_under(root: Path, value: str, key: str) -> Path:
+    path = (root / value).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError(f"{key} must stay inside data_root")
+    return path
 
 
 def _require_string(values: dict[str, Any], key: str) -> str:
@@ -117,7 +165,7 @@ def _require_positive_float(values: dict[str, Any], key: str) -> float:
 
 
 def load_training_config(path: Path) -> TrainingConfig:
-    """Load one complete YAML config and reject values that training cannot honor."""
+    """Load one complete application YAML and reject unsupported values."""
     config_path = path.expanduser().resolve()
     if not config_path.is_file():
         raise ValueError(f"training config does not exist: {config_path}")
@@ -136,11 +184,23 @@ def load_training_config(path: Path) -> TrainingConfig:
     if unexpected:
         raise ValueError(f"training config has unsupported keys: {', '.join(unexpected)}")
 
+    app_id = _require_string(loaded, "app_id")
+    if not APP_ID_PATTERN.fullmatch(app_id):
+        raise ValueError("app_id must be a lowercase slug containing letters, digits, and hyphens")
+    data_root = _resolve_project_path(_require_string(loaded, "data_root"))
+    if data_root.name != app_id:
+        raise ValueError("data_root directory name must match app_id")
+    annotations = _resolve_under(data_root, _require_string(loaded, "annotations_file"), "annotations_file")
+    images = _resolve_under(data_root, _require_string(loaded, "images_dir"), "images_dir")
+    processed = _resolve_under(data_root, _require_string(loaded, "processed_dir"), "processed_dir")
+    if annotations == images or annotations == processed or images == processed:
+        raise ValueError("annotations_file, images_dir, and processed_dir must be distinct")
+
     model_name = _require_string(loaded, "model_name_or_path")
-    dataset_dir = _require_string(loaded, "dataset_dir")
-    train_file = _require_string(loaded, "train_file")
-    validation_file = _require_string(loaded, "validation_file")
-    output_dir = _require_string(loaded, "output_dir")
+    output_root = _resolve_project_path(_require_string(loaded, "output_root"))
+    run_name = _require_string(loaded, "run_name")
+    if "/" in run_name or "\\" in run_name or run_name in {".", ".."}:
+        raise ValueError("run_name must be a single directory name")
     quant_type = _require_string(loaded, "quant_type")
     compute_dtype = _require_string(loaded, "compute_dtype")
     lr_scheduler_type = _require_string(loaded, "lr_scheduler_type")
@@ -160,14 +220,15 @@ def load_training_config(path: Path) -> TrainingConfig:
     if evaluation_strategy not in {"no", "steps", "epoch"}:
         raise ValueError("evaluation_strategy must be one of: no, steps, epoch")
 
+    validation_value = loaded["validation_fraction"]
+    if type(validation_value) not in (int, float) or not 0 < validation_value < 1:
+        raise ValueError("validation_fraction must be a number between 0 and 1")
     warmup_value = loaded["warmup_ratio"]
     if type(warmup_value) not in (int, float) or not 0 <= warmup_value <= 1:
         raise ValueError("warmup_ratio must be a number between 0 and 1")
-    warmup_ratio = float(warmup_value)
     lora_dropout_value = loaded["lora_dropout"]
     if type(lora_dropout_value) not in (int, float) or not 0 <= lora_dropout_value < 1:
         raise ValueError("lora_dropout must be a number from 0 (inclusive) to 1 (exclusive)")
-    lora_dropout = float(lora_dropout_value)
 
     target_modules = loaded["target_modules"]
     if not isinstance(target_modules, list) or not target_modules or any(not isinstance(item, str) or not item for item in target_modules):
@@ -177,10 +238,16 @@ def load_training_config(path: Path) -> TrainingConfig:
 
     return TrainingConfig(
         config_path=config_path,
+        app_id=app_id,
+        data_root=data_root,
+        annotations=annotations,
+        images=images,
+        processed=processed,
+        split_seed=_require_string(loaded, "split_seed"),
+        validation_fraction=float(validation_value),
         model=_resolve_project_path(model_name),
-        train=_resolve_project_path(dataset_dir) / train_file,
-        validation=_resolve_project_path(dataset_dir) / validation_file,
-        output=_resolve_project_path(output_dir),
+        output_root=output_root,
+        run_name=run_name,
         seed=_require_positive_int(loaded, "seed"),
         use_4bit_quantization=use_4bit_quantization,
         quant_type=quant_type,
@@ -193,14 +260,14 @@ def load_training_config(path: Path) -> TrainingConfig:
         num_train_epochs=_require_positive_float(loaded, "num_train_epochs"),
         learning_rate=_require_positive_float(loaded, "learning_rate"),
         lr_scheduler_type=lr_scheduler_type,
-        warmup_ratio=warmup_ratio,
+        warmup_ratio=float(warmup_value),
         logging_steps=_require_positive_int(loaded, "logging_steps"),
         save_strategy=save_strategy,
         evaluation_strategy=evaluation_strategy,
         save_total_limit=_require_positive_int(loaded, "save_total_limit"),
         lora_rank=_require_positive_int(loaded, "lora_rank"),
         lora_alpha=_require_positive_int(loaded, "lora_alpha"),
-        lora_dropout=lora_dropout,
+        lora_dropout=float(lora_dropout_value),
         target_modules=target_modules,
         exclude_modules=exclude_modules,
     )

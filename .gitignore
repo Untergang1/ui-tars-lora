@@ -1,7 +1,5 @@
-# User-provided source material and generated dataset files
-data/raw/
-data/annotations/*.csv
-data/processed/
+# Sensitive per-application source material and generated dataset files
+data/software/
 
 # Large, reproducible local assets
 models/

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate pixel-coordinate labels and create a deterministic 16/4 split."""
+"""Validate one application's bbox labels and create deterministic JSONL splits."""
 
 from __future__ import annotations
 
@@ -12,8 +12,20 @@ from pathlib import Path
 
 from PIL import Image
 
+from training_config import TrainingConfig, load_training_config
 
-REQUIRED_COLUMNS = ("id", "image", "description", "x", "y")
+
+REQUIRED_COLUMNS = (
+    "id",
+    "image",
+    "description",
+    "left",
+    "top",
+    "right",
+    "bottom",
+    "app_version",
+    "theme",
+)
 
 
 def error(message: str) -> None:
@@ -24,57 +36,70 @@ def error(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--annotations", type=Path, default=root / "data/annotations/grounding.csv")
-    parser.add_argument("--images-dir", type=Path, default=root / "data/raw")
-    parser.add_argument("--output-dir", type=Path, default=root / "data/processed")
+    parser.add_argument("--config", type=Path, default=root / "configs/apps/avantage.yaml")
     parser.add_argument("--contract", type=Path, default=root / "configs/grounding_contract.json")
-    parser.add_argument("--seed", default="20260714", help="Stable split seed, recorded in manifest")
-    parser.add_argument("--validation-size", type=int, default=4)
     return parser.parse_args()
 
 
-def load_rows(annotations: Path, images_dir: Path) -> list[dict[str, object]]:
-    if not annotations.is_file():
-        error(f"annotations file does not exist: {annotations}")
-    with annotations.open(newline="", encoding="utf-8") as handle:
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_rows(config: TrainingConfig) -> list[dict[str, object]]:
+    if not config.annotations.is_file():
+        error(f"annotations file does not exist: {config.annotations}")
+    if not config.images.is_dir():
+        error(f"images directory does not exist: {config.images}")
+    with config.annotations.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None or tuple(reader.fieldnames) != REQUIRED_COLUMNS:
-            error("CSV header must be exactly: id,image,description,x,y")
+            error(f"CSV header must be exactly: {','.join(REQUIRED_COLUMNS)}")
         rows = list(reader)
 
-    if len(rows) != 20:
-        error(f"expected exactly 20 labels for this first test, got {len(rows)}")
-
+    if len(rows) < 2:
+        error("at least two labels are required to create train and validation splits")
+    images_root = config.images.resolve()
     seen_ids: set[str] = set()
     validated: list[dict[str, object]] = []
     for row in rows:
         item_id = row["id"].strip()
         image_name = row["image"].strip()
         description = row["description"].strip()
-        if not item_id or not image_name or not description:
-            error("id, image, and description cannot be empty")
+        app_version = row["app_version"].strip()
+        theme = row["theme"].strip()
+        if not item_id or not image_name or not description or not app_version or not theme:
+            error("id, image, description, app_version, and theme cannot be empty")
         if item_id in seen_ids:
             error(f"duplicate id: {item_id}")
-        image_path = (images_dir / image_name).resolve()
-        if images_dir.resolve() not in image_path.parents or not image_path.is_file():
-            error(f"image must exist inside {images_dir}: {image_name}")
+        image_path = (images_root / image_name).resolve()
+        if images_root not in image_path.parents or not image_path.is_file():
+            error(f"image must exist inside {config.images}: {image_name}")
         try:
-            x, y = int(row["x"]), int(row["y"])
+            left, top, right, bottom = (int(row[key]) for key in ("left", "top", "right", "bottom"))
         except ValueError:
-            error(f"coordinates must be integers for {item_id}")
-        with Image.open(image_path) as image:
-            width, height = image.size
-        if not (0 <= x < width and 0 <= y < height):
-            error(f"coordinate ({x}, {y}) is outside {image_name} ({width}x{height})")
+            error(f"bbox coordinates must be integers for {item_id}")
+        try:
+            with Image.open(image_path) as image:
+                width, height = image.size
+        except OSError as exc:
+            error(f"cannot read image for {item_id}: {exc}")
+        if not (0 <= left < right <= width and 0 <= top < bottom <= height):
+            error(f"bbox ({left}, {top}, {right}, {bottom}) is outside {image_name} ({width}x{height})")
         seen_ids.add(item_id)
         validated.append(
             {
                 "id": item_id,
                 "image": image_name,
                 "image_path": str(image_path),
+                "image_sha256": sha256_file(image_path),
                 "description": description,
-                "x": x,
-                "y": y,
+                "bbox": {"left": left, "top": top, "right": right, "bottom": bottom},
+                "app_version": app_version,
+                "theme": theme,
                 "width": width,
                 "height": height,
             }
@@ -82,13 +107,12 @@ def load_rows(annotations: Path, images_dir: Path) -> list[dict[str, object]]:
     return validated
 
 
-def stable_split(rows: list[dict[str, object]], seed: str, validation_size: int) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    if validation_size != 4:
-        error("the first-test protocol requires exactly 4 validation examples")
+def stable_split(rows: list[dict[str, object]], seed: str, validation_fraction: float) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    validation_count = min(len(rows) - 1, max(1, round(len(rows) * validation_fraction)))
     ranked = sorted(rows, key=lambda row: hashlib.sha256(f"{seed}:{row['id']}".encode()).hexdigest())
-    validation_ids = {row["id"] for row in ranked[:validation_size]}
-    train = [row for row in rows if row["id"] not in validation_ids]
-    validation = [row for row in rows if row["id"] in validation_ids]
+    validation_ids = {str(row["id"]) for row in ranked[:validation_count]}
+    train = [row for row in rows if str(row["id"]) not in validation_ids]
+    validation = [row for row in rows if str(row["id"]) in validation_ids]
     return train, validation
 
 
@@ -102,15 +126,14 @@ def load_contract(path: Path) -> dict[str, object]:
     if not path.is_file():
         error(f"grounding contract does not exist: {path}; run extract_agent_s_contract.py first")
     contract = json.loads(path.read_text(encoding="utf-8"))
-    coordinate_space = contract.get("coordinate_space", {})
-    if coordinate_space != {"width": 1920, "height": 1080}:
+    if contract.get("coordinate_space") != {"width": 1920, "height": 1080}:
         error("unexpected coordinate space; review the Agent-S contract before preparing data")
     if contract.get("prompt_template") != "Query:{description}\nOutput only the coordinate of one point in your response.\n":
         error("unexpected Agent-S prompt contract; review before preparing data")
     return contract
 
 
-def make_training_records(rows: list[dict[str, object]], contract: dict[str, object]) -> list[dict[str, object]]:
+def make_training_records(rows: list[dict[str, object]], config: TrainingConfig, contract: dict[str, object]) -> list[dict[str, object]]:
     coordinate_space = contract["coordinate_space"]
     target_width = int(coordinate_space["width"])
     target_height = int(coordinate_space["height"])
@@ -118,44 +141,85 @@ def make_training_records(rows: list[dict[str, object]], contract: dict[str, obj
     response_template = str(contract["assistant_response_template"])
     records: list[dict[str, object]] = []
     for row in rows:
-        model_x = round(int(row["x"]) * target_width / int(row["width"]))
-        model_y = round(int(row["y"]) * target_height / int(row["height"]))
+        bbox = row["bbox"]
+        assert isinstance(bbox, dict)
+        center_x = (int(bbox["left"]) + int(bbox["right"]) - 1) / 2
+        center_y = (int(bbox["top"]) + int(bbox["bottom"]) - 1) / 2
+        model_x = round(center_x * target_width / int(row["width"]))
+        model_y = round(center_y * target_height / int(row["height"]))
         records.append(
             {
                 "id": row["id"],
+                "app_id": config.app_id,
                 "image": row["image_path"],
+                "image_name": row["image"],
+                "image_sha256": row["image_sha256"],
                 "prompt": template.format(description=row["description"]),
                 "response": response_template.format(x=model_x, y=model_y),
                 "target_coordinate": {"x": model_x, "y": model_y, "width": target_width, "height": target_height},
-                "original_coordinate": {"x": row["x"], "y": row["y"], "width": row["width"], "height": row["height"]},
+                "bbox": bbox,
+                "bbox_center": {"x": center_x, "y": center_y},
+                "original_image": {"width": row["width"], "height": row["height"]},
+                "app_version": row["app_version"],
+                "theme": row["theme"],
             }
         )
     return records
 
 
+def image_overlap(train: list[dict[str, object]], validation: list[dict[str, object]]) -> list[str]:
+    train_images = {str(row["image"]) for row in train}
+    validation_images = {str(row["image"]) for row in validation}
+    return sorted(train_images & validation_images)
+
+
 def main() -> None:
     args = parse_args()
-    rows = load_rows(args.annotations, args.images_dir)
+    try:
+        config = load_training_config(args.config)
+    except ValueError as exc:
+        error(str(exc))
+    rows = load_rows(config)
     contract = load_contract(args.contract)
-    train, validation = stable_split(rows, args.seed, args.validation_size)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(args.output_dir / "train_grounding.jsonl", train)
-    write_jsonl(args.output_dir / "validation_grounding.jsonl", validation)
-    write_jsonl(args.output_dir / "train.jsonl", make_training_records(train, contract))
-    write_jsonl(args.output_dir / "validation.jsonl", make_training_records(validation, contract))
+    train, validation = stable_split(rows, config.split_seed, config.validation_fraction)
+    config.processed.mkdir(parents=True, exist_ok=True)
+    write_jsonl(config.processed / "train_grounding.jsonl", train)
+    write_jsonl(config.processed / "validation_grounding.jsonl", validation)
+    write_jsonl(config.train, make_training_records(train, config, contract))
+    write_jsonl(config.validation, make_training_records(validation, config, contract))
+    overlap = image_overlap(train, validation)
+    image_inventory = {
+        str(row["image"]): {
+            "sha256": row["image_sha256"],
+            "width": row["width"],
+            "height": row["height"],
+        }
+        for row in sorted(rows, key=lambda item: str(item["image"]))
+    }
     manifest = {
-        "annotation_file": str(args.annotations.resolve()),
-        "images_dir": str(args.images_dir.resolve()),
-        "seed": args.seed,
+        "app_id": config.app_id,
+        "annotation_file": str(config.annotations.resolve()),
+        "annotation_sha256": sha256_file(config.annotations),
+        "images_dir": str(config.images.resolve()),
+        "split_seed": config.split_seed,
+        "validation_fraction": config.validation_fraction,
         "train_count": len(train),
         "validation_count": len(validation),
         "validation_ids": [row["id"] for row in validation],
         "coordinate_origin": "top-left",
         "coordinate_unit": "original screenshot pixels",
+        "bbox_convention": "left/top inclusive; right/bottom exclusive",
+        "target_point": "bbox geometric center",
         "agent_s_contract": str(args.contract.resolve()),
+        "agent_s_contract_sha256": sha256_file(args.contract),
+        "cross_split_images": overlap,
+        "cross_split_image_count": len(overlap),
+        "images": image_inventory,
     }
-    (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(train)} train and {len(validation)} validation labels to {args.output_dir}")
+    (config.processed / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {len(train)} train and {len(validation)} validation labels for {config.app_id} to {config.processed}")
+    if overlap:
+        print(f"warning: {len(overlap)} image(s) occur in both splits because splitting is by label row", file=sys.stderr)
 
 
 if __name__ == "__main__":

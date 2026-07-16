@@ -1,16 +1,18 @@
-# Runtime training hyperparameters for the first UI grounding QLoRA test.
-# scripts/run_train.sh and scripts/train_grounding.py both read this file.
+# Runtime parameters for the Avantage UI grounding QLoRA experiment.
+app_id: avantage
+data_root: data/software/avantage
+annotations_file: annotations.csv
+images_dir: images
+processed_dir: processed
+split_seed: "20260716"
+validation_fraction: 0.2
 model_name_or_path: models/UI-TARS-1.5-7B
-dataset_dir: data/processed
-train_file: train.jsonl
-validation_file: validation.jsonl
-output_dir: outputs/avantage-grounding-qlora
-seed: 20260714
+output_root: outputs
+run_name: baseline
+seed: 20260716
 use_4bit_quantization: true
 quant_type: nf4
 compute_dtype: bfloat16
-# The language path has LoRA modules and needs a backward graph. The frozen,
-# LoRA-excluded vision encoder uses xFormers for its forward attention workspace.
 language_gradient_checkpointing: true
 vision_gradient_checkpointing: false
 per_device_train_batch_size: 1

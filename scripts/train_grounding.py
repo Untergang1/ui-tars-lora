@@ -22,7 +22,7 @@ from xformers_vision import enable_xformers_vision_attention
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=root / "configs/lora_qlora.yaml")
+    parser.add_argument("--config", type=Path, default=root / "configs/apps/avantage.yaml")
     parser.add_argument("--print-config", action="store_true", help="Print the resolved YAML configuration and exit")
     return parser.parse_args()
 
@@ -72,6 +72,14 @@ def main() -> None:
     if args.print_config:
         print(json.dumps(config.as_json(), indent=2))
         return
+
+    if not config.train.is_file() or not config.validation.is_file():
+        raise FileNotFoundError(f"processed dataset is incomplete for {config.app_id}; run prepare_grounding_data.py first")
+    if not config.manifest.is_file():
+        raise FileNotFoundError(f"missing dataset manifest for {config.app_id}; run prepare_grounding_data.py first")
+    manifest = json.loads(config.manifest.read_text(encoding="utf-8"))
+    if manifest.get("app_id") != config.app_id:
+        raise ValueError(f"dataset manifest app_id does not match configuration: {config.app_id}")
 
     if not (config.model / "config.json").is_file():
         raise FileNotFoundError(f"not a local model directory: {config.model}")
@@ -142,6 +150,11 @@ def main() -> None:
     trainer.save_model(str(config.output))
     processor.save_pretrained(config.output)
     (config.output / "run_config.json").write_text(json.dumps(config.as_json(), indent=2) + "\n", encoding="utf-8")
+    (config.output / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    (config.output / "run_metadata.json").write_text(
+        json.dumps({"app_id": config.app_id, "run_name": config.run_name}, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

@@ -19,9 +19,9 @@ isolated on GPU 2 and port 18000.
 - `configs/` defines the grounding contract and LoRA/QLoRA parameters.
 - `scripts/` contains the reproducible data, environment, training, and
   evaluation entrypoints.
-- `data/raw/` and `data/annotations/*.csv` are user-provided, ignored source
-  material. `data/processed/`, `models/`, `outputs/`, and `logs/` are generated
-  or large local assets and must remain untracked.
+- `data/software/<app_id>/images/` and `annotations.csv` are user-provided,
+  ignored source material. Its `processed/` directory, `models/`, `outputs/`,
+  and `logs/` are generated or large local assets and must remain untracked.
 - `third_party/` contains ignored upstream clones; record their pinned revisions
   in `SOURCES.md`, not the vendor directories.
 
@@ -33,9 +33,10 @@ isolated on GPU 2 and port 18000.
    the production UI-TARS service and verifies the required storage headroom.
 3. Use the intended sequence: `scripts/copy_model.sh`,
    `scripts/pin_sources.sh`, `scripts/extract_agent_s_contract.py`,
-   `scripts/prepare_grounding_data.py`, `scripts/create_environment.sh`, and
-   `scripts/run_train.sh` as applicable. Training must use GPU 0; evaluation
-   uses a temporary service on GPU 1 and never port 18000.
+   `scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml`,
+   `scripts/create_environment.sh`, and `scripts/run_train.sh` as applicable.
+   Training must use GPU 0; evaluation uses a temporary service on GPU 1 and
+   never port 18000.
 4. Do not access the network, alter the production service, or delete local
    models, data, adapters, or outputs unless the user explicitly requests it.
 
@@ -43,14 +44,18 @@ isolated on GPU 2 and port 18000.
 
 - Treat screenshots and annotation CSV files as sensitive. Do not add them to
   Git or expose account names, identifiers, paths, or other retained material.
-- The initial experiment requires exactly 20 labels with the exact CSV header
-  `id,image,description,x,y`. IDs must be unique; image rows may repeat.
-- Coordinates are integer pixels in the original screenshot with a top-left
-  origin. Preserve the 1920x1080 Agent-S coordinate contract and its exact
-  prompt/response format unless the contract and all dependent code are updated
-  together.
-- Keep data splitting deterministic. The current 16/4 split is by label row,
-  not by distinct screenshot.
+- Each application has its own lowercase-slug directory, YAML profile, processed
+  data, and LoRA output. The caller must explicitly select the application;
+  never infer it from a screenshot or mix application records.
+- The CSV header is exactly
+  `id,image,description,left,top,right,bottom,app_version,theme`. IDs are
+  unique within an application; image rows may repeat.
+- Bboxes use integer original-screenshot pixels with top-left origin: left/top
+  are inclusive and right/bottom are exclusive. The training point is the bbox
+  geometric center. Preserve the 1920x1080 Agent-S single-point prompt and
+  response contract unless all dependent code changes together.
+- Keep data splitting deterministic. The configured 80/20 split is by label
+  row, not distinct screenshot; record and surface any cross-split image reuse.
 
 ## Code and Validation
 
