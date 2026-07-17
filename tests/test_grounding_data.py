@@ -35,10 +35,10 @@ class GroundingDataTests(unittest.TestCase):
         Image.new("RGB", (10, 10)).save(images / "shared.png")
         with (root / "annotations.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(("id", "image", "description", "left", "top", "right", "bottom", "app_version", "theme"))
-            writer.writerow(("first", "shared.png", "first target", 2, 2, 6, 6, "1.0", "light"))
-            writer.writerow(("second", "shared.png", "second target", 3, 3, 5, 5, "1.0", "dark"))
-            writer.writerow(("third", "shared.png", "third target", 0, 0, 1, 1, "1.1", "light"))
+            writer.writerow(("id", "image", "description", "left", "top", "right", "bottom", "app_version", "description_uia_referenced"))
+            writer.writerow(("first", "shared.png", "first target", 2, 2, 6, 6, "1.0", "true"))
+            writer.writerow(("second", "shared.png", "second target", 3, 3, 5, 5, "1.0", "false"))
+            writer.writerow(("third", "shared.png", "third target", 0, 0, 1, 1, "1.1", "unknown"))
 
     def test_bbox_rows_create_center_targets_and_deterministic_split(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -56,6 +56,7 @@ class GroundingDataTests(unittest.TestCase):
             self.assertEqual([row["id"] for row in train], [row["id"] for row in again_train])
             self.assertEqual([row["id"] for row in validation], [row["id"] for row in again_validation])
             self.assertTrue(all(record["app_id"] == "test-app" for record in records))
+            self.assertEqual({row["description_uia_referenced"] for row in rows}, {"true", "false", "unknown"})
             first = next(record for record in records if record["id"] == "first")
             self.assertEqual(first["bbox_center"], {"x": 3.5, "y": 3.5})
             self.assertEqual(first["target_coordinate"]["x"], 672)
@@ -72,20 +73,32 @@ class GroundingDataTests(unittest.TestCase):
             with redirect_stderr(io.StringIO()), self.assertRaisesRegex(SystemExit, "1"):
                 load_rows(config)
 
-    def test_blank_version_and_theme_are_normalized_to_unknown(self) -> None:
+    def test_blank_version_and_uia_reference_are_normalized_to_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "test-app"
             root.mkdir()
             self.write_annotations(root)
             csv_path = root / "annotations.csv"
-            content = csv_path.read_text(encoding="utf-8").replace("1.0,light", " , ", 1)
+            content = csv_path.read_text(encoding="utf-8").replace("1.0,true", " , ", 1)
             csv_path.write_text(content, encoding="utf-8")
 
             rows = load_rows(load_training_config(self.write_config(root)))
 
             first = next(row for row in rows if row["id"] == "first")
             self.assertEqual(first["app_version"], "unknown")
-            self.assertEqual(first["theme"], "unknown")
+            self.assertEqual(first["description_uia_referenced"], "unknown")
+
+    def test_invalid_uia_reference_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "test-app"
+            root.mkdir()
+            self.write_annotations(root)
+            csv_path = root / "annotations.csv"
+            csv_path.write_text(csv_path.read_text(encoding="utf-8").replace("1.0,true", "1.0,maybe", 1), encoding="utf-8")
+            config = load_training_config(self.write_config(root))
+
+            with redirect_stderr(io.StringIO()), self.assertRaisesRegex(SystemExit, "1"):
+                load_rows(config)
 
 
 if __name__ == "__main__":

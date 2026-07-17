@@ -24,8 +24,9 @@ REQUIRED_COLUMNS = (
     "right",
     "bottom",
     "app_version",
-    "theme",
+    "description_uia_referenced",
 )
+ALLOWED_UIA_REFERENCE_VALUES = {"true", "false", "unknown"}
 
 
 def error(message: str) -> None:
@@ -70,9 +71,11 @@ def load_rows(config: TrainingConfig) -> list[dict[str, object]]:
         image_name = row["image"].strip()
         description = row["description"].strip()
         app_version = row["app_version"].strip() or "unknown"
-        theme = row["theme"].strip() or "unknown"
+        description_uia_referenced = row["description_uia_referenced"].strip() or "unknown"
         if not item_id or not image_name or not description:
             error("id, image, and description cannot be empty")
+        if description_uia_referenced not in ALLOWED_UIA_REFERENCE_VALUES:
+            error(f"description_uia_referenced for {item_id} must be true, false, or unknown")
         if item_id in seen_ids:
             error(f"duplicate id: {item_id}")
         image_path = (images_root / image_name).resolve()
@@ -99,7 +102,7 @@ def load_rows(config: TrainingConfig) -> list[dict[str, object]]:
                 "description": description,
                 "bbox": {"left": left, "top": top, "right": right, "bottom": bottom},
                 "app_version": app_version,
-                "theme": theme,
+                "description_uia_referenced": description_uia_referenced,
                 "width": width,
                 "height": height,
             }
@@ -161,7 +164,7 @@ def make_training_records(rows: list[dict[str, object]], config: TrainingConfig,
                 "bbox_center": {"x": center_x, "y": center_y},
                 "original_image": {"width": row["width"], "height": row["height"]},
                 "app_version": row["app_version"],
-                "theme": row["theme"],
+                "description_uia_referenced": row["description_uia_referenced"],
             }
         )
     return records

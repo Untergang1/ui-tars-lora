@@ -38,8 +38,8 @@ application.
 Create `data/<app_id>/annotations.csv` with this exact header:
 
 ```csv
-id,image,description,left,top,right,bottom,app_version,theme
-toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar,1100,160,1184,210,8.2,light
+id,image,description,left,top,right,bottom,app_version,description_uia_referenced
+toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar,1100,160,1184,210,8.2,true
 ```
 
 - `id` is unique within the application and remains stable as data grows.
@@ -47,8 +47,11 @@ toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar
 - `left,top,right,bottom` are integer original-screenshot pixels. Left/top are
   inclusive; right/bottom are exclusive. A valid box satisfies
   `0 <= left < right <= image_width` and `0 <= top < bottom <= image_height`.
-- `app_version` and `theme` are retained in the evaluation report for regression
-  analysis. Blank or whitespace-only values are normalized to `unknown`.
+- `app_version` is retained in the evaluation report for regression analysis;
+  blank or whitespace-only values are normalized to `unknown`.
+- `description_uia_referenced` records whether the description used UIA
+  information: `true`, `false`, or `unknown`. Blank or whitespace-only values
+  are normalized to `unknown`.
 - The training point is the geometric center of the pixel box:
   `((left + right - 1) / 2, (top + bottom - 1) / 2)`.
 
@@ -104,7 +107,7 @@ names, identifiers, paths, and other retained material before annotation.
    The report defaults to `outputs/<app_id>/<run_name>/evaluation.json` and
    includes total-denominator bbox accuracy, parseability, out-of-contract
    responses, center-distance diagnostics, per-example results, and grouped
-   metrics by application version and theme.
+   metrics by application version and UIA-description reference status.
 
 ## Validation
 
