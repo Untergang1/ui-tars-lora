@@ -47,8 +47,8 @@ toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar
 - `left,top,right,bottom` are integer original-screenshot pixels. Left/top are
   inclusive; right/bottom are exclusive. A valid box satisfies
   `0 <= left < right <= image_width` and `0 <= top < bottom <= image_height`.
-- `app_version` and `theme` are required for every example. They are retained
-  in the evaluation report for regression analysis.
+- `app_version` and `theme` are retained in the evaluation report for regression
+  analysis. Blank or whitespace-only values are normalized to `unknown`.
 - The training point is the geometric center of the pixel box:
   `((left + right - 1) / 2, (top + bottom - 1) / 2)`.
 

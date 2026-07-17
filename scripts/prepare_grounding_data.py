@@ -69,10 +69,10 @@ def load_rows(config: TrainingConfig) -> list[dict[str, object]]:
         item_id = row["id"].strip()
         image_name = row["image"].strip()
         description = row["description"].strip()
-        app_version = row["app_version"].strip()
-        theme = row["theme"].strip()
-        if not item_id or not image_name or not description or not app_version or not theme:
-            error("id, image, description, app_version, and theme cannot be empty")
+        app_version = row["app_version"].strip() or "unknown"
+        theme = row["theme"].strip() or "unknown"
+        if not item_id or not image_name or not description:
+            error("id, image, and description cannot be empty")
         if item_id in seen_ids:
             error(f"duplicate id: {item_id}")
         image_path = (images_root / image_name).resolve()

@@ -72,6 +72,21 @@ class GroundingDataTests(unittest.TestCase):
             with redirect_stderr(io.StringIO()), self.assertRaisesRegex(SystemExit, "1"):
                 load_rows(config)
 
+    def test_blank_version_and_theme_are_normalized_to_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "test-app"
+            root.mkdir()
+            self.write_annotations(root)
+            csv_path = root / "annotations.csv"
+            content = csv_path.read_text(encoding="utf-8").replace("1.0,light", " , ", 1)
+            csv_path.write_text(content, encoding="utf-8")
+
+            rows = load_rows(load_training_config(self.write_config(root)))
+
+            first = next(row for row in rows if row["id"] == "first")
+            self.assertEqual(first["app_version"], "unknown")
+            self.assertEqual(first["theme"], "unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

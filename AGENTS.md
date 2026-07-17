@@ -49,7 +49,8 @@ isolated on GPU 2 and port 18000.
   never infer it from a screenshot or mix application records.
 - The CSV header is exactly
   `id,image,description,left,top,right,bottom,app_version,theme`. IDs are
-  unique within an application; image rows may repeat.
+  unique within an application; image rows may repeat. Blank `app_version` and
+  `theme` values are normalized to `unknown`.
 - Bboxes use integer original-screenshot pixels with top-left origin: left/top
   are inclusive and right/bottom are exclusive. The training point is the bbox
   geometric center. Preserve the 1920x1080 Agent-S single-point prompt and
