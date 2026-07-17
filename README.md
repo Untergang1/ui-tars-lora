@@ -18,7 +18,7 @@ GPU 0 and temporary adapter evaluation uses GPU 1.
 Every application has a separate ignored data root:
 
 ```text
-data/software/<app_id>/
+data/<app_id>/
   images/                 # sensitive PNG/JPEG screenshots
   annotations.csv         # sensitive bbox labels
   processed/              # generated JSONL and manifest
@@ -35,7 +35,7 @@ application.
 
 ## BBox Annotation Format
 
-Create `data/software/<app_id>/annotations.csv` with this exact header:
+Create `data/<app_id>/annotations.csv` with this exact header:
 
 ```csv
 id,image,description,left,top,right,bottom,app_version,theme

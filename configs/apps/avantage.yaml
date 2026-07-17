@@ -1,6 +1,6 @@
 # Runtime parameters for the Avantage UI grounding QLoRA experiment.
 app_id: avantage
-data_root: data/software/avantage
+data_root: data/avantage
 annotations_file: annotations.csv
 images_dir: images
 processed_dir: processed

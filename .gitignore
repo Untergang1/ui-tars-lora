@@ -1,5 +1,5 @@
 # Sensitive per-application source material and generated dataset files
-data/software/
+data/*/
 
 # Large, reproducible local assets
 models/

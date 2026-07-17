@@ -24,9 +24,9 @@ class TrainingConfigTests(unittest.TestCase):
         config = load_training_config(self.config_path)
 
         self.assertEqual(config.app_id, "avantage")
-        self.assertEqual(config.data_root, PROJECT_ROOT / "data/software/avantage")
-        self.assertEqual(config.train, PROJECT_ROOT / "data/software/avantage/processed/train.jsonl")
-        self.assertEqual(config.validation, PROJECT_ROOT / "data/software/avantage/processed/validation.jsonl")
+        self.assertEqual(config.data_root, PROJECT_ROOT / "data/avantage")
+        self.assertEqual(config.train, PROJECT_ROOT / "data/avantage/processed/train.jsonl")
+        self.assertEqual(config.validation, PROJECT_ROOT / "data/avantage/processed/validation.jsonl")
         self.assertEqual(config.output, PROJECT_ROOT / "outputs/avantage/baseline")
         self.assertEqual(config.validation_fraction, 0.2)
         self.assertTrue(config.language_gradient_checkpointing)
@@ -52,7 +52,7 @@ class TrainingConfigTests(unittest.TestCase):
 
     def test_data_root_must_match_application_id(self) -> None:
         values = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
-        values["data_root"] = "data/software/other-app"
+        values["data_root"] = "data/other-app"
         with tempfile.NamedTemporaryFile("w", suffix=".yaml") as handle:
             yaml.safe_dump(values, handle)
             handle.flush()

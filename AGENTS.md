@@ -19,7 +19,7 @@ isolated on GPU 2 and port 18000.
 - `configs/` defines the grounding contract and LoRA/QLoRA parameters.
 - `scripts/` contains the reproducible data, environment, training, and
   evaluation entrypoints.
-- `data/software/<app_id>/images/` and `annotations.csv` are user-provided,
+- `data/<app_id>/images/` and `annotations.csv` are user-provided,
   ignored source material. Its `processed/` directory, `models/`, `outputs/`,
   and `logs/` are generated or large local assets and must remain untracked.
 - `third_party/` contains ignored upstream clones; record their pinned revisions

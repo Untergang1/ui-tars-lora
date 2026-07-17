@@ -1,6 +1,6 @@
 # Runtime parameters for the Omnic UI grounding QLoRA experiment.
 app_id: omnic
-data_root: data/software/omnic
+data_root: data/omnic
 annotations_file: annotations.csv
 images_dir: images
 processed_dir: processed
