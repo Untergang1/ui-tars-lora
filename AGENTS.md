@@ -48,11 +48,9 @@ isolated on GPU 2 and port 18000.
   data, and LoRA output. The caller must explicitly select the application;
   never infer it from a screenshot or mix application records.
 - The CSV header is exactly
-  `id,image,description,left,top,right,bottom,app_version,description_uia_referenced`.
-  IDs are unique within an application; image rows may repeat. Blank
-  `app_version` and `description_uia_referenced` values are normalized to
-  `unknown`; UIA reference values must otherwise be `true`, `false`, or
-  `unknown`.
+  `id,image,description,left,top,right,bottom,app_version`. IDs are unique
+  within an application; image rows may repeat. Blank `app_version` values are
+  normalized to `unknown`.
 - Bboxes use integer original-screenshot pixels with top-left origin: left/top
   are inclusive and right/bottom are exclusive. The training point is the bbox
   geometric center. Preserve the 1920x1080 Agent-S single-point prompt and

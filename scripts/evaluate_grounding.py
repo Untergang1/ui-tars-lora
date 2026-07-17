@@ -52,7 +52,6 @@ def score_label(label: dict[str, object], response: object | None) -> dict[str, 
         "bbox_hit": False,
         "failure_reason": None,
         "app_version": label["app_version"],
-        "description_uia_referenced": label["description_uia_referenced"],
     }
     values = [int(value) for value in COORDINATE_PATTERN.findall(text)]
     if len(values) < 2:
@@ -143,7 +142,6 @@ def main() -> None:
         "bbox_convention": "left/top inclusive; right/bottom exclusive",
         "metrics": aggregate(results),
         "by_app_version": grouped_aggregate(results, "app_version"),
-        "by_description_uia_referenced": grouped_aggregate(results, "description_uia_referenced"),
         "unexpected_response_ids": sorted(set(responses) - label_ids),
         "examples": results,
     }

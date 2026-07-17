@@ -10,7 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from evaluate_grounding import aggregate, grouped_aggregate, score_label  # noqa: E402
+from evaluate_grounding import aggregate, score_label  # noqa: E402
 
 
 LABEL = {
@@ -21,7 +21,6 @@ LABEL = {
     "bbox_center": {"x": 19.5, "y": 29.5},
     "original_image": {"width": 1920, "height": 1080},
     "app_version": "1.0",
-    "description_uia_referenced": "true",
 }
 
 
@@ -44,18 +43,6 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(metrics["parseable"], 2)
         self.assertEqual(metrics["in_contract_range"], 1)
         self.assertAlmostEqual(metrics["bbox_accuracy"], 1 / 3)
-
-    def test_results_group_by_uia_description_reference(self) -> None:
-        true_label = dict(LABEL)
-        false_label = {**LABEL, "id": "without-uia", "description_uia_referenced": "false"}
-        groups = grouped_aggregate(
-            [score_label(true_label, "(10, 20)"), score_label(false_label, "(10, 20)")],
-            "description_uia_referenced",
-        )
-
-        self.assertEqual(groups["true"]["bbox_hits"], 1)
-        self.assertEqual(groups["false"]["bbox_hits"], 1)
-
 
 if __name__ == "__main__":
     unittest.main()
