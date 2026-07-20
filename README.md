@@ -86,28 +86,45 @@ names, identifiers, paths, and other retained material before annotation.
    resulting `outputs/<app_id>/<run_name>/` freezes the resolved configuration,
    dataset manifest, and application metadata beside the adapter.
 
-5. Start an adapter only with an explicit application identity on GPU 1:
+5. Evaluate the held-out validation set automatically. The evaluation command
+   starts an evaluation-only vLLM service on GPU 1 and port 18001, reads
+   `processed/validation.jsonl`, sends each screenshot and grounding prompt to
+   the native UI-TARS model, scores the responses, and stops the service when
+   it is done:
 
    ```bash
-   scripts/serve_adapter.sh --app avantage \
+   /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
+     scripts/evaluate_grounding.py --config configs/apps/avantage.yaml
+   ```
+
+   To evaluate an application adapter instead, pass its absolute path. The
+   adapter metadata must belong to the selected application:
+
+   ```bash
+   /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
+     scripts/evaluate_grounding.py \
+     --config configs/apps/avantage.yaml \
      --adapter "$(pwd)/outputs/avantage/baseline"
    ```
 
-   The script rejects port 18000 and refuses an adapter whose metadata belongs
-   to a different application.
+   The automatic mode rejects port 18000, which remains reserved for the
+   production service. Use `--port`, `--startup-timeout`, `--request-timeout`,
+   or `--max-tokens` only when the defaults need adjustment.
 
-6. Evaluate JSONL responses containing `id` and `response`:
+6. The report is written by default to
+   `outputs/<app_id>/<run_name>/eval_MMDD_HHMMSS.json`, using UTC in the file
+   name. It includes the model mode, total-denominator bbox accuracy,
+   parseability, out-of-contract responses, center-distance diagnostics,
+   per-example model responses, and grouped metrics by application version.
+   `--report` overrides the output path.
+
+   For an existing response file, offline scoring remains available:
 
    ```bash
    python3 scripts/evaluate_grounding.py \
      --config configs/apps/avantage.yaml \
      --responses outputs/avantage/baseline/responses.jsonl
    ```
-
-   The report defaults to `outputs/<app_id>/<run_name>/evaluation.json` and
-   includes total-denominator bbox accuracy, parseability, out-of-contract
-   responses, center-distance diagnostics, per-example results, and grouped
-   metrics by application version.
 
 ## Validation
 
