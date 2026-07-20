@@ -18,8 +18,13 @@ isolated on GPU 2 and port 18000.
 
 The project's base model is UI-TARS-1.5, which is itself based on Qwen2.5-VL
 and fine-tuned for UI interaction scenarios. Agent-S is an example agent
-project that uses UI-TARS-1.5 for grounding. When implementation details are
-unclear, refer to the Agent-S, UI-TARS-1.5, and Qwen2.5-VL implementations.
+project that uses UI-TARS-1.5 for grounding. The local `reference/` directory
+contains the Agent-S, UI-TARS, and Qwen3-VL upstream repositories for
+implementation reference. Qwen2.5-VL has been officially updated to Qwen3-VL;
+its core implementation remains applicable, and the Qwen3-VL commit history
+can be used to trace the earlier Qwen2.5-VL implementation when needed. When
+implementation details are unclear, refer to the Agent-S, UI-TARS-1.5, and
+Qwen3-VL implementations and history.
 
 - `configs/` defines the grounding contract and LoRA/QLoRA parameters.
 - `scripts/` contains the reproducible data, environment, training, and
