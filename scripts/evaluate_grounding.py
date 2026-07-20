@@ -61,17 +61,17 @@ def score_label(label: dict[str, object], response: object | None) -> dict[str, 
     original = label["original_image"]
     bbox = label["bbox"]
     assert isinstance(target, dict) and isinstance(original, dict) and isinstance(bbox, dict)
+    width, height = int(original["width"]), int(original["height"])
+    if int(target["width"]) != width or int(target["height"]) != height:
+        raise ValueError(f"label {item_id} does not use original-image coordinate dimensions")
     predicted_model = {"x": values[0], "y": values[1]}
     result["parseable"] = True
     result["predicted_model_coordinate"] = predicted_model
-    target_width, target_height = int(target["width"]), int(target["height"])
-    if not (0 <= values[0] <= target_width and 0 <= values[1] <= target_height):
+    if not (0 <= values[0] < width and 0 <= values[1] < height):
         result["failure_reason"] = "coordinate_outside_contract"
         return result
     result["in_contract_range"] = True
-    width, height = int(original["width"]), int(original["height"])
-    predicted_x = round(values[0] * width / target_width)
-    predicted_y = round(values[1] * height / target_height)
+    predicted_x, predicted_y = values[0], values[1]
     result["predicted_pixel"] = {"x": predicted_x, "y": predicted_y}
     result["target_bbox"] = bbox
     center = label["bbox_center"]

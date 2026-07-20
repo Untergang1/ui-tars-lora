@@ -58,7 +58,8 @@ class GroundingDataTests(unittest.TestCase):
             self.assertTrue(all(record["app_id"] == "test-app" for record in records))
             first = next(record for record in records if record["id"] == "first")
             self.assertEqual(first["bbox_center"], {"x": 3.5, "y": 3.5})
-            self.assertEqual(first["target_coordinate"]["x"], 672)
+            self.assertEqual(first["target_coordinate"], {"x": 4, "y": 4, "width": 10, "height": 10})
+            self.assertEqual(first["response"], "(4, 4)")
 
     def test_invalid_bbox_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

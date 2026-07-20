@@ -63,8 +63,9 @@ Qwen3-VL implementations and history.
   normalized to `unknown`.
 - Bboxes use integer original-screenshot pixels with top-left origin: left/top
   are inclusive and right/bottom are exclusive. The training point is the bbox
-  geometric center. Preserve the 1920x1080 single-point grounding prompt and
-  response contract unless all dependent code changes together.
+  geometric center, rounded to an integer original-image pixel for the
+  single-point response. Preserve this prompt and response contract unless all
+  dependent code changes together.
 - Keep data splitting deterministic. The configured 80/20 split is by label
   row, not distinct screenshot; record and surface any cross-split image reuse.
 

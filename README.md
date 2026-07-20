@@ -51,6 +51,10 @@ toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar
   blank or whitespace-only values are normalized to `unknown`.
 - The training point is the geometric center of the pixel box:
   `((left + right - 1) / 2, (top + bottom - 1) / 2)`.
+- The model response is that center rounded to an integer in the original
+  screenshot's pixel space, with a top-left origin. It is not a coordinate in
+  the processor's smart-resized image or a fixed output canvas; use the
+  original screenshot dimensions when validating or acting on a response.
 
 Screenshots and CSV files are sensitive and ignored by Git. Remove account
 names, identifiers, paths, and other retained material before annotation.

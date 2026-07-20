@@ -1,9 +1,7 @@
 {
   "prompt_template": "Query:{description}\\nOutput only the coordinate of one point in your response.\\n",
-  "coordinate_space": {
-    "width": 1920,
-    "height": 1080
-  },
+  "coordinate_space": "original_image_pixels",
+  "coordinate_origin": "top-left",
   "assistant_response_template": "({x}, {y})",
   "parser": "first two decimal integer substrings in the model response"
 }

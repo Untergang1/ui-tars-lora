@@ -16,10 +16,10 @@ from evaluate_grounding import aggregate, score_label  # noqa: E402
 LABEL = {
     "id": "target",
     "app_id": "avantage",
-    "target_coordinate": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+    "target_coordinate": {"x": 0, "y": 0, "width": 100, "height": 80},
     "bbox": {"left": 10, "top": 20, "right": 30, "bottom": 40},
     "bbox_center": {"x": 19.5, "y": 29.5},
-    "original_image": {"width": 1920, "height": 1080},
+    "original_image": {"width": 100, "height": 80},
     "app_version": "1.0",
 }
 
@@ -31,11 +31,12 @@ class EvaluationTests(unittest.TestCase):
         bottom_edge = score_label(LABEL, "(10, 40)")
 
         self.assertTrue(hit["bbox_hit"])
+        self.assertEqual(hit["predicted_pixel"], {"x": 10, "y": 20})
         self.assertFalse(right_edge["bbox_hit"])
         self.assertFalse(bottom_edge["bbox_hit"])
 
     def test_unparseable_and_out_of_range_responses_reduce_total_accuracy(self) -> None:
-        rows = [score_label(LABEL, "(10, 20)"), score_label(LABEL, "none"), score_label(LABEL, "(1921, 20)")]
+        rows = [score_label(LABEL, "(10, 20)"), score_label(LABEL, "none"), score_label(LABEL, "(100, 20)")]
         metrics = aggregate(rows)
 
         self.assertEqual(metrics["total"], 3)

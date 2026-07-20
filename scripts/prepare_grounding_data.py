@@ -123,17 +123,16 @@ def load_contract(path: Path) -> dict[str, object]:
     if not path.is_file():
         error(f"grounding contract does not exist: {path}")
     contract = json.loads(path.read_text(encoding="utf-8"))
-    if contract.get("coordinate_space") != {"width": 1920, "height": 1080}:
-        error("unexpected coordinate space in grounding contract")
+    if contract.get("coordinate_space") != "original_image_pixels":
+        error("grounding contract must use original_image_pixels coordinate space")
+    if contract.get("coordinate_origin") != "top-left":
+        error("grounding contract must use a top-left coordinate origin")
     if contract.get("prompt_template") != "Query:{description}\nOutput only the coordinate of one point in your response.\n":
         error("unexpected prompt template in grounding contract")
     return contract
 
 
 def make_training_records(rows: list[dict[str, object]], config: TrainingConfig, contract: dict[str, object]) -> list[dict[str, object]]:
-    coordinate_space = contract["coordinate_space"]
-    target_width = int(coordinate_space["width"])
-    target_height = int(coordinate_space["height"])
     template = str(contract["prompt_template"])
     response_template = str(contract["assistant_response_template"])
     records: list[dict[str, object]] = []
@@ -142,8 +141,10 @@ def make_training_records(rows: list[dict[str, object]], config: TrainingConfig,
         assert isinstance(bbox, dict)
         center_x = (int(bbox["left"]) + int(bbox["right"]) - 1) / 2
         center_y = (int(bbox["top"]) + int(bbox["bottom"]) - 1) / 2
-        model_x = round(center_x * target_width / int(row["width"]))
-        model_y = round(center_y * target_height / int(row["height"]))
+        model_x = round(center_x)
+        model_y = round(center_y)
+        image_width = int(row["width"])
+        image_height = int(row["height"])
         records.append(
             {
                 "id": row["id"],
@@ -153,7 +154,7 @@ def make_training_records(rows: list[dict[str, object]], config: TrainingConfig,
                 "image_sha256": row["image_sha256"],
                 "prompt": template.format(description=row["description"]),
                 "response": response_template.format(x=model_x, y=model_y),
-                "target_coordinate": {"x": model_x, "y": model_y, "width": target_width, "height": target_height},
+                "target_coordinate": {"x": model_x, "y": model_y, "width": image_width, "height": image_height},
                 "bbox": bbox,
                 "bbox_center": {"x": center_x, "y": center_y},
                 "original_image": {"width": row["width"], "height": row["height"]},
@@ -206,6 +207,8 @@ def main() -> None:
         "coordinate_unit": "original screenshot pixels",
         "bbox_convention": "left/top inclusive; right/bottom exclusive",
         "target_point": "bbox geometric center",
+        "response_coordinate_space": "original image pixels",
+        "response_coordinate_origin": "top-left",
         "grounding_contract": str(args.contract.resolve()),
         "grounding_contract_sha256": sha256_file(args.contract),
         "cross_split_images": overlap,
