@@ -10,6 +10,9 @@ logs/
 # Vendored upstream repositories are pinned in SOURCES.md instead
 third_party/
 
+# Local upstream repositories used only for implementation reference
+reference/
+
 # Python and editor state
 .venv/
 __pycache__/
