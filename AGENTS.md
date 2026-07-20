@@ -16,6 +16,10 @@ UI grounding: a screenshot and element description produce a single-coordinate
 response. The production vLLM service is out of scope and must remain
 isolated on GPU 2 and port 18000.
 
+The project's base model is UI-TARS-1.5, which is itself based on Qwen2.5-VL
+and fine-tuned for UI interaction scenarios. When implementation details are
+unclear, refer to the UI-TARS-1.5 and Qwen2.5-VL implementations.
+
 - `configs/` defines the grounding contract and LoRA/QLoRA parameters.
 - `scripts/` contains the reproducible data, environment, training, and
   evaluation entrypoints.
