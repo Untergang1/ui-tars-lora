@@ -12,8 +12,8 @@
 ## Project Overview
 
 This repository fine-tunes the local `ByteDance-Seed/UI-TARS-1.5-7B` model for
-UI grounding: a screenshot and element description produce an Agent-S-compatible
-coordinate response. The production vLLM service is out of scope and must remain
+UI grounding: a screenshot and element description produce a single-coordinate
+response. The production vLLM service is out of scope and must remain
 isolated on GPU 2 and port 18000.
 
 - `configs/` defines the grounding contract and LoRA/QLoRA parameters.
@@ -32,7 +32,7 @@ isolated on GPU 2 and port 18000.
 2. For training-related work, run `scripts/check_runtime.sh` first. It protects
    the production UI-TARS service and verifies the required storage headroom.
 3. Use the intended sequence: `scripts/copy_model.sh`,
-   `scripts/pin_sources.sh`, `scripts/extract_agent_s_contract.py`,
+   `scripts/pin_sources.sh`,
    `scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml`,
    `scripts/create_environment.sh`, and `scripts/run_train.sh` as applicable.
    Training must use GPU 0; evaluation uses a temporary service on GPU 1 and
@@ -53,7 +53,7 @@ isolated on GPU 2 and port 18000.
   normalized to `unknown`.
 - Bboxes use integer original-screenshot pixels with top-left origin: left/top
   are inclusive and right/bottom are exclusive. The training point is the bbox
-  geometric center. Preserve the 1920x1080 Agent-S single-point prompt and
+  geometric center. Preserve the 1920x1080 single-point grounding prompt and
   response contract unless all dependent code changes together.
 - Keep data splitting deterministic. The configured 80/20 split is by label
   row, not distinct screenshot; record and surface any cross-split image reuse.

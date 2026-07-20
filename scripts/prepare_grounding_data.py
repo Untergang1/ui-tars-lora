@@ -121,12 +121,12 @@ def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
 
 def load_contract(path: Path) -> dict[str, object]:
     if not path.is_file():
-        error(f"grounding contract does not exist: {path}; run extract_agent_s_contract.py first")
+        error(f"grounding contract does not exist: {path}")
     contract = json.loads(path.read_text(encoding="utf-8"))
     if contract.get("coordinate_space") != {"width": 1920, "height": 1080}:
-        error("unexpected coordinate space; review the Agent-S contract before preparing data")
+        error("unexpected coordinate space in grounding contract")
     if contract.get("prompt_template") != "Query:{description}\nOutput only the coordinate of one point in your response.\n":
-        error("unexpected Agent-S prompt contract; review before preparing data")
+        error("unexpected prompt template in grounding contract")
     return contract
 
 
@@ -206,8 +206,8 @@ def main() -> None:
         "coordinate_unit": "original screenshot pixels",
         "bbox_convention": "left/top inclusive; right/bottom exclusive",
         "target_point": "bbox geometric center",
-        "agent_s_contract": str(args.contract.resolve()),
-        "agent_s_contract_sha256": sha256_file(args.contract),
+        "grounding_contract": str(args.contract.resolve()),
+        "grounding_contract_sha256": sha256_file(args.contract),
         "cross_split_images": overlap,
         "cross_split_image_count": len(overlap),
         "images": image_inventory,

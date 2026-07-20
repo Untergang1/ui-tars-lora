@@ -4,14 +4,14 @@ This project fine-tunes the local `ByteDance-Seed/UI-TARS-1.5-7B` model for
 UI grounding while keeping one LoRA adapter per application:
 
 ```text
-screenshot + UI element description -> Agent-S-compatible coordinate response
+screenshot + UI element description -> single-coordinate response
 ```
 
-The Agent-S contract remains a single coordinate response. Labels include a
-full bounding box: its geometric center supplies the single-point training
-target, and validation considers a prediction correct when it falls inside the
-box. The production vLLM service remains on GPU 2 and port 18000; training uses
-GPU 0 and temporary adapter evaluation uses GPU 1.
+The grounding contract uses a single coordinate response. Labels include a full
+bounding box: its geometric center supplies the single-point training target,
+and validation considers a prediction correct when it falls inside the box. The
+production vLLM service remains on GPU 2 and port 18000; training uses GPU 0
+and temporary adapter evaluation uses GPU 1.
 
 ## Application Layout
 
@@ -58,8 +58,7 @@ names, identifiers, paths, and other retained material before annotation.
 ## Workflow
 
 1. Run `scripts/check_runtime.sh` and `scripts/copy_model.sh`.
-2. Pin the Agent-S prompt with `scripts/pin_sources.sh` and
-   `scripts/extract_agent_s_contract.py`.
+2. Pin the Qwen2.5-VL source with `scripts/pin_sources.sh`.
 3. Create the application image directory and CSV, then prepare it:
 
    ```bash
