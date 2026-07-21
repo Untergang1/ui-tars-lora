@@ -45,19 +45,24 @@ class GroundingCollator:
     processor: Any
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        if len(examples) != 1:
-            raise ValueError("first-test protocol requires per-device batch size 1")
-        item = examples[0]
-        user = {"role": "user", "content": [{"type": "image", "image": item["image"]}, {"type": "text", "text": item["prompt"]}]}
-        assistant = {"role": "assistant", "content": [{"type": "text", "text": item["response"]}]}
-        full_messages = [user, assistant]
-        full_text = self.processor.apply_chat_template(full_messages, tokenize=False, add_generation_prompt=False)
-        prompt_text = self.processor.apply_chat_template([user], tokenize=False, add_generation_prompt=True)
+        if not examples:
+            raise ValueError("cannot collate an empty batch")
+        full_messages = []
+        prompt_messages = []
+        for item in examples:
+            user = {"role": "user", "content": [{"type": "image", "image": item["image"]}, {"type": "text", "text": item["prompt"]}]}
+            assistant = {"role": "assistant", "content": [{"type": "text", "text": item["response"]}]}
+            full_messages.append([user, assistant])
+            prompt_messages.append([user])
+        full_text = [self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False) for messages in full_messages]
+        prompt_text = [self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True) for messages in prompt_messages]
         image_inputs, video_inputs = process_vision_info(full_messages)
-        batch = self.processor(text=[full_text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
-        prompt_batch = self.processor(text=[prompt_text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+        batch = self.processor(text=full_text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+        prompt_batch = self.processor(text=prompt_text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
         labels = batch["input_ids"].clone()
-        labels[:, : int(prompt_batch["attention_mask"][0].sum())] = -100
+        prompt_lengths = prompt_batch["attention_mask"].sum(dim=1)
+        for index, prompt_length in enumerate(prompt_lengths.tolist()):
+            labels[index, :prompt_length] = -100
         labels[batch["attention_mask"] == 0] = -100
         batch["labels"] = labels
         return batch
