@@ -99,6 +99,35 @@ class RunArtifacts:
             handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
             handle.flush()
 
+    def record_epoch_evaluation(
+        self,
+        epoch: int,
+        global_step: int,
+        eval_loss: float | None,
+        summary: dict[str, object],
+        examples: list[dict[str, object]],
+    ) -> Path:
+        """Atomically replace the lightweight generation report for one epoch."""
+        if epoch <= 0:
+            raise ValueError("epoch evaluation reports require a positive epoch")
+        evaluation_dir = self.records / "eval"
+        evaluation_dir.mkdir(exist_ok=True)
+        destination = evaluation_dir / f"epoch_{epoch:03d}.json"
+        _write_json(
+            destination,
+            {
+                "schema_version": 1,
+                "app_id": self.app_id,
+                "run_name": self.run_name,
+                "epoch": epoch,
+                "global_step": global_step,
+                "recorded_at": _utc_now(),
+                "summary": {"eval_loss": eval_loss, **summary},
+                "examples": examples,
+            },
+        )
+        return destination
+
     def best_eval_loss(self) -> float | None:
         if not self.metrics_path.is_file():
             return None

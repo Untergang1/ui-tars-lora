@@ -28,6 +28,7 @@ outputs/<app_id>/<run_name>/
     best/               # lowest validation-loss deployable adapter
   checkpoints/          # resumable Trainer state, retained per save_total_limit
   records/              # frozen config/data, JSONL metrics, text logs, TensorBoard events
+    eval/               # one lightweight generated-coordinate report per epoch
 configs/apps/<app_id>.yaml
 ```
 
@@ -110,6 +111,14 @@ names, identifiers, paths, and other retained material before annotation.
    `records/metrics.jsonl` retains step and evaluation metrics independently of
    checkpoint retention. `records/train_<UTC>_<pid>.log` contains the complete
    launcher output, and `records/tensorboard/` contains TensorBoard events.
+   After each completed epoch eval, training also writes
+   `records/eval/epoch_<epoch>.json`. This compact JSON contains that epoch's
+   token-level `eval_loss`, aggregate coordinate quality metrics, and one
+   record per validation label with only `id`, `bbox_hit`,
+   `pixel_distance_to_bbox_center`, and `relative_diagonal_error`. The two
+   distances are `null` for unparseable or out-of-range coordinates; no model
+   responses, prompts, screenshots, or bbox labels are copied into this file.
+   Re-running an epoch while resuming training atomically replaces its report.
    Run `scripts/create_environment.sh` once after adopting this layout to add
    the TensorBoard dependency. Older flat-layout runs are intentionally not
    resumable through this command.

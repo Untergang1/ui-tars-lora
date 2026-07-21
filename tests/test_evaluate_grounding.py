@@ -58,6 +58,23 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(metrics["in_contract_range"], 1)
         self.assertAlmostEqual(metrics["bbox_accuracy"], 1 / 3)
 
+    def test_aggregate_includes_range_rate_and_distance_percentiles(self) -> None:
+        rows = [
+            {"parseable": True, "in_contract_range": True, "bbox_hit": True, "pixel_distance_to_bbox_center": 0.0, "relative_diagonal_error": 0.0},
+            {"parseable": True, "in_contract_range": True, "bbox_hit": False, "pixel_distance_to_bbox_center": 10.0, "relative_diagonal_error": 0.1},
+            {"parseable": True, "in_contract_range": True, "bbox_hit": False, "pixel_distance_to_bbox_center": 20.0, "relative_diagonal_error": 0.2},
+            {"parseable": False, "in_contract_range": False, "bbox_hit": False},
+        ]
+
+        metrics = aggregate(rows)
+
+        self.assertEqual(metrics["in_contract_range_rate"], 0.75)
+        self.assertEqual(metrics["pixel_distance_to_bbox_center"], {"mean": 10.0, "median": 10.0, "p90": 18.0})
+        relative_errors = metrics["relative_diagonal_error"]
+        self.assertAlmostEqual(relative_errors["mean"], 0.1)
+        self.assertAlmostEqual(relative_errors["median"], 0.1)
+        self.assertAlmostEqual(relative_errors["p90"], 0.18)
+
     def test_default_report_name_uses_utc_timestamp_format(self) -> None:
         evaluated_at = datetime(2026, 7, 20, 13, 4, 5, tzinfo=timezone.utc)
 

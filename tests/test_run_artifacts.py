@@ -89,6 +89,30 @@ class RunArtifactTests(unittest.TestCase):
         self.assertEqual(metadata["selection"], "last")
         self.assertEqual(artifacts.best_eval_loss(), 0.4)
 
+    def test_epoch_evaluation_is_a_single_atomic_report_per_epoch(self) -> None:
+        artifacts = self.artifacts()
+        artifacts.prepare(resume=False)
+        summary = {
+            "total": 2,
+            "bbox_accuracy": 0.5,
+            "pixel_distance_to_bbox_center": {"mean": 10.0, "median": 10.0, "p90": 12.0},
+        }
+        examples = [
+            {"id": "one", "bbox_hit": True, "pixel_distance_to_bbox_center": 1.0, "relative_diagonal_error": 0.01},
+            {"id": "two", "bbox_hit": False, "pixel_distance_to_bbox_center": None, "relative_diagonal_error": None},
+        ]
+
+        path = artifacts.record_epoch_evaluation(1, 10, 0.4, summary, examples)
+        artifacts.record_epoch_evaluation(1, 11, 0.3, summary, examples)
+
+        self.assertEqual(path, artifacts.records / "eval" / "epoch_001.json")
+        report = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["epoch"], 1)
+        self.assertEqual(report["global_step"], 11)
+        self.assertEqual(report["summary"]["eval_loss"], 0.3)
+        self.assertEqual(report["examples"], examples)
+
 
 if __name__ == "__main__":
     unittest.main()

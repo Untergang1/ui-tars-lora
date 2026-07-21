@@ -16,6 +16,7 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from qwen_vl_utils import process_vision_info
 from torch.utils.data import Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainerCallback, TrainingArguments
+from grounding_metrics import aggregate, score_label
 from run_artifacts import RunArtifacts
 from training_config import load_training_config
 from xformers_vision import enable_xformers_vision_attention
@@ -71,11 +72,98 @@ class GroundingCollator:
         return batch
 
 
+class EpochGenerationEvaluator:
+    """Generate and score validation coordinates after completed training epochs."""
+
+    def __init__(self, processor: Any, dataset: GroundingDataset, artifacts: RunArtifacts) -> None:
+        self.processor = processor
+        self.dataset = dataset
+        self.artifacts = artifacts
+
+    @staticmethod
+    def completed_epoch(epoch: object) -> int | None:
+        if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+            return None
+        rounded = round(float(epoch))
+        if rounded <= 0 or abs(float(epoch) - rounded) > 1e-6:
+            return None
+        return int(rounded)
+
+    def response_for(self, model: Any, item: dict[str, Any]) -> str:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": item["image"]},
+                    {"type": "text", "text": item["prompt"]},
+                ],
+            }
+        ]
+        prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[prompt], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
+        )
+        device = next(model.parameters()).device
+        inputs = {key: value.to(device) if isinstance(value, torch.Tensor) else value for key, value in inputs.items()}
+        prompt_length = int(inputs["input_ids"].shape[1])
+        generated = model.generate(
+            **inputs,
+            do_sample=False,
+            num_beams=1,
+            max_new_tokens=32,
+            use_cache=True,
+        )
+        return self.processor.batch_decode(
+            generated[:, prompt_length:], skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0]
+
+    def evaluate(self, model: Any, epoch: int, global_step: int, eval_loss: object) -> tuple[Path, dict[str, object]]:
+        was_training = bool(model.training)
+        scores: list[dict[str, object]] = []
+        try:
+            model.eval()
+            with torch.inference_mode():
+                for item in self.dataset.rows:
+                    scores.append(score_label(item, self.response_for(model, item)))
+        finally:
+            model.train(was_training)
+
+        metrics = aggregate(scores)
+        summary = {
+            key: metrics[key]
+            for key in (
+                "total",
+                "parseable",
+                "parseable_rate",
+                "in_contract_range",
+                "in_contract_range_rate",
+                "bbox_hits",
+                "bbox_accuracy",
+                "pixel_distance_to_bbox_center",
+                "relative_diagonal_error",
+            )
+        }
+        examples = [
+            {
+                "id": score["id"],
+                "bbox_hit": score["bbox_hit"],
+                "pixel_distance_to_bbox_center": score.get("pixel_distance_to_bbox_center"),
+                "relative_diagonal_error": score.get("relative_diagonal_error"),
+            }
+            for score in scores
+        ]
+        loss = float(eval_loss) if isinstance(eval_loss, (int, float)) else None
+        path = self.artifacts.record_epoch_evaluation(epoch, global_step, loss, summary, examples)
+        return path, summary
+
+
 class ArtifactCallback(TrainerCallback):
     """Persist metrics and publish adapters independently from Trainer checkpoints."""
 
-    def __init__(self, artifacts: RunArtifacts) -> None:
+    def __init__(self, artifacts: RunArtifacts, generation_evaluator: EpochGenerationEvaluator) -> None:
         self.artifacts = artifacts
+        self.generation_evaluator = generation_evaluator
 
     def on_log(self, args: TrainingArguments, state: Any, control: Any, logs: dict[str, Any] | None = None, **kwargs: Any) -> Any:
         if logs:
@@ -83,6 +171,18 @@ class ArtifactCallback(TrainerCallback):
         return control
 
     def on_evaluate(self, args: TrainingArguments, state: Any, control: Any, metrics: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+        epoch = self.generation_evaluator.completed_epoch(state.epoch)
+        if epoch is not None:
+            path, generation_metrics = self.generation_evaluator.evaluate(
+                kwargs["model"], epoch, state.global_step, metrics.get("eval_loss") if metrics else None
+            )
+            print(
+                "generation_eval "
+                f"epoch={epoch} step={state.global_step} path={path} "
+                f"bbox_accuracy={generation_metrics['bbox_accuracy']} "
+                f"parseable_rate={generation_metrics['parseable_rate']}",
+                flush=True,
+            )
         if metrics and self.artifacts.should_export_best(metrics.get("eval_loss")):
             self.artifacts.export_adapter(kwargs["model"], "best", state.global_step, state.epoch, float(metrics["eval_loss"]))
         return control
@@ -156,9 +256,11 @@ def build_trainer(config: Any, artifacts: RunArtifacts) -> Trainer:
         eval_strategy=config.evaluation_strategy, save_strategy=config.save_strategy,
         save_total_limit=config.save_total_limit, report_to=["tensorboard"], remove_unused_columns=False, seed=config.seed,
     )
+    validation_dataset = GroundingDataset(config.validation)
     return Trainer(
         model=model, args=training_args, train_dataset=GroundingDataset(config.train),
-        eval_dataset=GroundingDataset(config.validation), data_collator=GroundingCollator(processor), callbacks=[ArtifactCallback(artifacts)],
+        eval_dataset=validation_dataset, data_collator=GroundingCollator(processor),
+        callbacks=[ArtifactCallback(artifacts, EpochGenerationEvaluator(processor, validation_dataset, artifacts))],
     )
 
 
