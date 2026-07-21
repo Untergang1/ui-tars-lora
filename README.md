@@ -10,8 +10,9 @@ screenshot + UI element description -> single-coordinate response
 The grounding contract uses a single coordinate response. Labels include a full
 bounding box: its geometric center supplies the single-point training target,
 and validation considers a prediction correct when it falls inside the box. The
-production vLLM service remains on GPU 2 and port 18000; training uses GPU 0
-and temporary adapter evaluation uses GPU 1.
+production vLLM service remains on GPU 2 and port 18000. Training defaults to
+GPU 0, while temporary adapter evaluation and the standalone adapter service
+default to GPU 1; each entrypoint accepts `--gpu <index>` for manual placement.
 
 ## Application Layout
 
@@ -87,10 +88,10 @@ names, identifiers, paths, and other retained material before annotation.
    validation results.
 
 4. Create the isolated environment with `scripts/create_environment.sh`, then
-   train one application adapter on GPU 0:
+   train one application adapter (GPU 0 by default):
 
    ```bash
-   scripts/run_train.sh configs/apps/<app_id>.yaml
+   scripts/run_train.sh --gpu 0 configs/apps/<app_id>.yaml
    ```
 
    Change `run_name` in the application YAML before a distinct experiment. The
@@ -124,14 +125,14 @@ names, identifiers, paths, and other retained material before annotation.
    resumable through this command.
 
 5. Evaluate the held-out validation set automatically. The evaluation command
-   starts an evaluation-only vLLM service on GPU 1 and port 18001, reads
+   starts an evaluation-only vLLM service on GPU 1 by default and port 18001, reads
    `processed/validation.jsonl`, sends each screenshot and grounding prompt to
    the native UI-TARS model, scores the responses, and stops the service when
    it is done:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
-     scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml
+     scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml --gpu 1
    ```
 
    To evaluate an application adapter instead, pass its absolute path. The
@@ -144,9 +145,17 @@ names, identifiers, paths, and other retained material before annotation.
      --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best"
    ```
 
+   To expose an adapter as a persistent local vLLM service instead, use:
+
+   ```bash
+   scripts/serve_adapter.sh --app <app_id> \
+     --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best" --gpu 1
+   ```
+
    The automatic mode rejects port 18000, which remains reserved for the
-   production service. Use `--port`, `--startup-timeout`, `--request-timeout`,
-   or `--max-tokens` only when the defaults need adjustment.
+   production service. Use `--gpu` to select any GPU index (including GPU 2)
+   when manually scheduling the workload. Use `--port`, `--startup-timeout`,
+   `--request-timeout`, or `--max-tokens` only when the defaults need adjustment.
 
 6. The report is written by default to
    `outputs/<app_id>/<run_name>/eval_MMDD_HHMMSS.json`, using UTC in the file

@@ -83,9 +83,15 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report, Path("outputs/avantage/baseline/eval_0720_130405.json"))
 
     def test_automatic_mode_rejects_the_production_port(self) -> None:
-        args = SimpleNamespace(port=18000, startup_timeout=1, request_timeout=1, max_tokens=1)
+        args = SimpleNamespace(gpu=1, port=18000, startup_timeout=1, request_timeout=1, max_tokens=1)
 
         with self.assertRaisesRegex(ValueError, "reserved"):
+            validate_automatic_args(args)
+
+    def test_automatic_mode_rejects_negative_gpu(self) -> None:
+        args = SimpleNamespace(gpu=-1, port=18001, startup_timeout=1, request_timeout=1, max_tokens=1)
+
+        with self.assertRaisesRegex(ValueError, "non-negative"):
             validate_automatic_args(args)
 
     def test_adapter_must_belong_to_the_selected_application(self) -> None:
@@ -134,10 +140,11 @@ class EvaluationTests(unittest.TestCase):
         process.poll.return_value = None
         mocked_popen.return_value = process
 
-        with TemporaryVllmService(["vllm", "serve"], 18001, 5) as base_url:
+        with TemporaryVllmService(["vllm", "serve"], 18001, 5, 2) as base_url:
             self.assertEqual(base_url, "http://127.0.0.1:18001")
 
         mocked_wait.assert_called_once_with(process, "http://127.0.0.1:18001", 5)
+        self.assertEqual(mocked_popen.call_args.kwargs["env"]["CUDA_VISIBLE_DEVICES"], "2")
         mocked_getpgid.assert_called_once_with(123)
         mocked_killpg.assert_called_once()
         process.wait.assert_called_once_with(timeout=30)
@@ -159,7 +166,7 @@ class EvaluationTests(unittest.TestCase):
         mocked_popen.return_value = process
 
         with self.assertRaisesRegex(RuntimeError, "not ready"):
-            with TemporaryVllmService(["vllm", "serve"], 18001, 5):
+            with TemporaryVllmService(["vllm", "serve"], 18001, 5, 1):
                 pass
 
         mocked_wait.assert_called_once()

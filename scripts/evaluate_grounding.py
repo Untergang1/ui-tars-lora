@@ -26,6 +26,7 @@ from training_config import TrainingConfig, load_training_config
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONDA_ENV = Path("/root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora")
 DEFAULT_PORT = 18001
+DEFAULT_GPU = 1
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 300.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_TOKENS = 128
@@ -38,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", type=Path, help="Overrides the timestamped report path")
     parser.add_argument("--adapter", type=Path, help="Absolute LoRA adapter path; defaults to the native model")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Temporary vLLM port (default: {DEFAULT_PORT})")
+    parser.add_argument(
+        "--gpu", type=int, default=DEFAULT_GPU,
+        help=f"GPU index for the temporary vLLM service (default: {DEFAULT_GPU})",
+    )
     parser.add_argument("--startup-timeout", type=float, default=DEFAULT_STARTUP_TIMEOUT_SECONDS)
     parser.add_argument("--request-timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
@@ -79,6 +84,8 @@ def is_port_in_use(port: int) -> bool:
 
 
 def validate_automatic_args(args: argparse.Namespace) -> None:
+    if args.gpu < 0:
+        raise ValueError("gpu must be a non-negative integer")
     if args.port == 18000:
         raise ValueError("port 18000 is reserved for the production service")
     if not 1 <= args.port <= 65535:
@@ -167,19 +174,20 @@ def wait_for_service(process: subprocess.Popen[object], base_url: str, timeout: 
 
 
 class TemporaryVllmService:
-    """Own one evaluation-only vLLM process and its GPU 1 process group."""
+    """Own one evaluation-only vLLM process and its GPU process group."""
 
-    def __init__(self, command: list[str], port: int, startup_timeout: float) -> None:
+    def __init__(self, command: list[str], port: int, startup_timeout: float, gpu: int) -> None:
         self.command = command
         self.port = port
         self.startup_timeout = startup_timeout
+        self.gpu = gpu
         self.process: subprocess.Popen[object] | None = None
 
     def __enter__(self) -> str:
         environment = os.environ.copy()
         environment.update(
             {
-                "CUDA_VISIBLE_DEVICES": "1",
+                "CUDA_VISIBLE_DEVICES": str(self.gpu),
                 "HF_HOME": str(PROJECT_ROOT / ".cache/huggingface"),
                 "HF_HUB_CACHE": str(PROJECT_ROOT / ".cache/huggingface/hub"),
                 "TOKENIZERS_PARALLELISM": "false",
@@ -266,12 +274,19 @@ def infer_responses(config: TrainingConfig, labels: list[dict[str, object]], arg
     adapter = validate_adapter(args.adapter, config.app_id) if args.adapter is not None else None
     command, request_model, inference = vllm_command(config, args.port, adapter)
     responses: dict[str, object] = {}
-    with TemporaryVllmService(command, args.port, args.startup_timeout) as base_url:
+    with TemporaryVllmService(command, args.port, args.startup_timeout, args.gpu) as base_url:
         for index, label in enumerate(labels, start=1):
             item_id = str(label["id"])
             print(f"Evaluating {index}/{len(labels)}: {item_id}", flush=True)
             responses[item_id] = request_response(base_url, request_model, label, args.request_timeout, args.max_tokens)
-    inference.update({"port": args.port, "max_tokens": args.max_tokens, "request_timeout_seconds": args.request_timeout})
+    inference.update(
+        {
+            "gpu": args.gpu,
+            "port": args.port,
+            "max_tokens": args.max_tokens,
+            "request_timeout_seconds": args.request_timeout,
+        }
+    )
     return responses, inference
 
 

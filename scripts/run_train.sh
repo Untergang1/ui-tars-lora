@@ -5,9 +5,10 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONDA_ENV="/root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora"
 CONFIG_PATH="$PROJECT_ROOT/configs/apps/avantage.yaml"
 RESUME_ARGS=()
+GPU=0
 
 usage() {
-  echo "usage: $0 [--resume] [training-config.yaml]" >&2
+  echo "usage: $0 [--resume] [--gpu <index>] [training-config.yaml]" >&2
   exit 2
 }
 
@@ -16,6 +17,11 @@ while (( $# > 0 )); do
     --resume)
       RESUME_ARGS=(--resume)
       shift
+      ;;
+    --gpu)
+      (( $# >= 2 )) || usage
+      GPU="$2"
+      shift 2
       ;;
     --*)
       usage
@@ -28,11 +34,12 @@ while (( $# > 0 )); do
   esac
 done
 
+[[ "$GPU" =~ ^[0-9]+$ ]] || { echo "GPU index must be a non-negative integer: $GPU" >&2; exit 2; }
 "$PROJECT_ROOT/scripts/check_runtime.sh"
 [[ -x "$CONDA_ENV/bin/python" ]] || { echo "Run scripts/create_environment.sh first." >&2; exit 1; }
 [[ -f "$CONFIG_PATH" ]] || { echo "Training config does not exist: $CONFIG_PATH" >&2; exit 1; }
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES="$GPU"
 export HF_HOME="$PROJECT_ROOT/.cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 export TOKENIZERS_PARALLELISM=false

@@ -6,9 +6,10 @@ CONDA_ENV="/root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora"
 PORT="${PORT:-18001}"
 APP_ID=""
 ADAPTER_PATH=""
+GPU=1
 
 usage() {
-  echo "usage: $0 --app <app-id> --adapter /absolute/path/to/adapter" >&2
+  echo "usage: $0 --app <app-id> --adapter /absolute/path/to/adapter [--gpu <index>]" >&2
   exit 2
 }
 
@@ -24,6 +25,11 @@ while (( $# > 0 )); do
       ADAPTER_PATH="$2"
       shift 2
       ;;
+    --gpu)
+      (( $# >= 2 )) || usage
+      GPU="$2"
+      shift 2
+      ;;
     *)
       usage
       ;;
@@ -32,6 +38,7 @@ done
 
 [[ "$APP_ID" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "Invalid app ID: $APP_ID" >&2; exit 2; }
 [[ -n "$ADAPTER_PATH" && "$ADAPTER_PATH" = /* ]] || { echo "Adapter path must be absolute." >&2; exit 2; }
+[[ "$GPU" =~ ^[0-9]+$ ]] || { echo "GPU index must be a non-negative integer: $GPU" >&2; exit 2; }
 [[ "$PORT" != "18000" ]] || { echo "Port 18000 is reserved for the production service." >&2; exit 2; }
 [[ -x "$CONDA_ENV/bin/vllm" ]] || { echo "Missing isolated environment: $CONDA_ENV" >&2; exit 1; }
 [[ -f "$ADAPTER_PATH/adapter_config.json" ]] || { echo "Not a PEFT adapter directory: $ADAPTER_PATH" >&2; exit 1; }
@@ -51,7 +58,7 @@ if ss -ltn "sport = :$PORT" | awk 'NR>1 {found=1} END {exit found ? 0 : 1}'; the
   exit 1
 fi
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES="$GPU"
 export HF_HOME="$PROJECT_ROOT/.cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 exec "$CONDA_ENV/bin/vllm" serve "$PROJECT_ROOT/models/UI-TARS-1.5-7B" \
