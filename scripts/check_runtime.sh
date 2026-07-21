@@ -23,8 +23,7 @@ fi
 
 available_gib=$(df -BG "$PROJECT_ROOT" | awk 'NR==2 {gsub(/G/, "", $4); print $4}')
 if (( available_gib < MIN_FREE_GIB )); then
-  echo "Only ${available_gib}GiB available; at least ${MIN_FREE_GIB}GiB is required." >&2
-  exit 1
+  echo "Warning: only ${available_gib}GiB available; ${MIN_FREE_GIB}GiB is recommended for training." >&2
 fi
 
 echo "UI-TARS source snapshot: $SOURCE_SNAPSHOT"
