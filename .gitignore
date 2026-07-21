@@ -1,6 +1,11 @@
 # Sensitive per-application source material and generated dataset files
 data/*/
 
+# Application profiles may contain local runtime settings. Keep only the
+# shareable template under version control.
+configs/apps/*.yaml
+!configs/apps/app.template.yaml
+
 # Large, reproducible local assets
 models/
 outputs/

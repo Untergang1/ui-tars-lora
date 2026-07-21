@@ -29,9 +29,8 @@ configs/apps/<app_id>.yaml
 
 `<app_id>` is a stable lowercase slug such as `avantage` or `omnic`. The
 application YAML is the single source of truth for data paths, split settings,
-training parameters, and output isolation. The checked-in Avantage and Omnic
-profiles are starting points; copy `configs/apps/app.template.yaml` for a new
-application.
+training parameters, and output isolation. Application profiles are local and
+ignored by Git; copy `configs/apps/app.template.yaml` to create one.
 
 ## BBox Annotation Format
 
@@ -63,10 +62,17 @@ names, identifiers, paths, and other retained material before annotation.
 
 1. Run `scripts/check_runtime.sh` and `scripts/copy_model.sh`.
 2. Pin the Qwen2.5-VL source with `scripts/pin_sources.sh`.
-3. Create the application image directory and CSV, then prepare it:
+3. Create a local application profile, then create its image directory and CSV:
 
    ```bash
-   python3 scripts/prepare_grounding_data.py --config configs/apps/avantage.yaml
+   cp configs/apps/app.template.yaml configs/apps/<app_id>.yaml
+   ```
+
+   Update `app_id`, `data_root`, and `run_name` in the copied profile, then
+   prepare the data:
+
+   ```bash
+   python3 scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml
    ```
 
    It accepts any data size of at least two labels, deterministically assigns
@@ -79,7 +85,7 @@ names, identifiers, paths, and other retained material before annotation.
    train one application adapter on GPU 0:
 
    ```bash
-   scripts/run_train.sh configs/apps/avantage.yaml
+   scripts/run_train.sh configs/apps/<app_id>.yaml
    ```
 
    Change `run_name` in the application YAML before a distinct experiment. The
@@ -94,7 +100,7 @@ names, identifiers, paths, and other retained material before annotation.
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
-     scripts/evaluate_grounding.py --config configs/apps/avantage.yaml
+     scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml
    ```
 
    To evaluate an application adapter instead, pass its absolute path. The
@@ -103,8 +109,8 @@ names, identifiers, paths, and other retained material before annotation.
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py \
-     --config configs/apps/avantage.yaml \
-     --adapter "$(pwd)/outputs/avantage/baseline"
+     --config configs/apps/<app_id>.yaml \
+     --adapter "$(pwd)/outputs/<app_id>/<run_name>"
    ```
 
    The automatic mode rejects port 18000, which remains reserved for the
@@ -122,8 +128,8 @@ names, identifiers, paths, and other retained material before annotation.
 
    ```bash
    python3 scripts/evaluate_grounding.py \
-     --config configs/apps/avantage.yaml \
-     --responses outputs/avantage/baseline/responses.jsonl
+     --config configs/apps/<app_id>.yaml \
+     --responses outputs/<app_id>/<run_name>/responses.jsonl
    ```
 
 ## Validation
@@ -132,7 +138,7 @@ Validate a profile without loading model weights or data:
 
 ```bash
 /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
-  scripts/train_grounding.py --config configs/apps/avantage.yaml --print-config
+  scripts/train_grounding.py --config configs/apps/<app_id>.yaml --print-config
 ```
 
 Run the repository tests with `python3 -m unittest discover -s tests`.
