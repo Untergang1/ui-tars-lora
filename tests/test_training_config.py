@@ -18,16 +18,19 @@ from training_config import load_training_config  # noqa: E402
 
 class TrainingConfigTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.config_path = PROJECT_ROOT / "configs/apps/avantage.yaml"
+        self.config_path = PROJECT_ROOT / "configs/apps/app.template.yaml"
 
     def test_default_config_resolves_application_paths(self) -> None:
         config = load_training_config(self.config_path)
 
-        self.assertEqual(config.app_id, "avantage")
-        self.assertEqual(config.data_root, PROJECT_ROOT / "data/avantage")
-        self.assertEqual(config.train, PROJECT_ROOT / "data/avantage/processed/train.jsonl")
-        self.assertEqual(config.validation, PROJECT_ROOT / "data/avantage/processed/validation.jsonl")
-        self.assertEqual(config.output, PROJECT_ROOT / "outputs/avantage/baseline")
+        self.assertEqual(config.app_id, "example-app")
+        self.assertEqual(config.data_root, PROJECT_ROOT / "data/example-app")
+        self.assertEqual(config.train, PROJECT_ROOT / "data/example-app/processed/train.jsonl")
+        self.assertEqual(config.validation, PROJECT_ROOT / "data/example-app/processed/validation.jsonl")
+        self.assertEqual(config.output, PROJECT_ROOT / "outputs/example-app/baseline")
+        self.assertEqual(config.adapters, PROJECT_ROOT / "outputs/example-app/baseline/adapters")
+        self.assertEqual(config.checkpoints, PROJECT_ROOT / "outputs/example-app/baseline/checkpoints")
+        self.assertEqual(config.records, PROJECT_ROOT / "outputs/example-app/baseline/records")
         self.assertEqual(config.validation_fraction, 0.2)
         self.assertTrue(config.language_gradient_checkpointing)
         self.assertFalse(config.vision_gradient_checkpointing)

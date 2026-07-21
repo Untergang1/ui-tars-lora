@@ -21,11 +21,12 @@ fi
   'datasets==3.2.0' \
   'bitsandbytes==0.45.0' \
   'qwen-vl-utils==0.0.10' \
-  'PyYAML==6.0.3'
+  'PyYAML==6.0.3' \
+  'tensorboard==2.18.0'
 
 "$TARGET_PREFIX/bin/python" - <<'PY'
 import importlib.metadata as metadata
-for package in ('torch', 'transformers', 'peft', 'accelerate', 'datasets', 'bitsandbytes', 'qwen-vl-utils', 'PyYAML', 'xformers'):
+for package in ('torch', 'transformers', 'peft', 'accelerate', 'datasets', 'bitsandbytes', 'qwen-vl-utils', 'PyYAML', 'tensorboard', 'xformers'):
     print(f'{package}={metadata.version(package)}')
 PY
 mkdir -p "$PROJECT_ROOT/.cache/huggingface"

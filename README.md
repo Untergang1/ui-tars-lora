@@ -23,7 +23,11 @@ data/<app_id>/
   annotations.csv         # sensitive bbox labels
   processed/              # generated JSONL and manifest
 outputs/<app_id>/<run_name>/
-  adapter files and frozen run/data metadata
+  adapters/
+    last/               # latest deployable PEFT adapter
+    best/               # lowest validation-loss deployable adapter
+  checkpoints/          # resumable Trainer state, retained per save_total_limit
+  records/              # frozen config/data, JSONL metrics, text logs, TensorBoard events
 configs/apps/<app_id>.yaml
 ```
 
@@ -89,8 +93,26 @@ names, identifiers, paths, and other retained material before annotation.
    ```
 
    Change `run_name` in the application YAML before a distinct experiment. The
-   resulting `outputs/<app_id>/<run_name>/` freezes the resolved configuration,
-   dataset manifest, and application metadata beside the adapter.
+   resulting `outputs/<app_id>/<run_name>/` keeps deployable adapters separate
+   from resumable checkpoints and training records. `adapters/last` is refreshed
+   at every checkpoint, while `adapters/best` is refreshed whenever `eval_loss`
+   improves. Each adapter has application metadata and can be supplied directly
+   to the service or evaluator.
+
+   A run with existing artifacts is never overwritten. To continue an interrupted
+   run created with this layout, pass `--resume`; it validates the frozen
+   configuration and dataset manifest, then resumes the newest checkpoint:
+
+   ```bash
+   scripts/run_train.sh --resume configs/apps/<app_id>.yaml
+   ```
+
+   `records/metrics.jsonl` retains step and evaluation metrics independently of
+   checkpoint retention. `records/train_<UTC>_<pid>.log` contains the complete
+   launcher output, and `records/tensorboard/` contains TensorBoard events.
+   Run `scripts/create_environment.sh` once after adopting this layout to add
+   the TensorBoard dependency. Older flat-layout runs are intentionally not
+   resumable through this command.
 
 5. Evaluate the held-out validation set automatically. The evaluation command
    starts an evaluation-only vLLM service on GPU 1 and port 18001, reads
@@ -110,7 +132,7 @@ names, identifiers, paths, and other retained material before annotation.
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py \
      --config configs/apps/<app_id>.yaml \
-     --adapter "$(pwd)/outputs/<app_id>/<run_name>"
+     --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best"
    ```
 
    The automatic mode rejects port 18000, which remains reserved for the

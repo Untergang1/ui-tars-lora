@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from importlib.util import find_spec
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,8 @@ import torch
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from qwen_vl_utils import process_vision_info
 from torch.utils.data import Dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainingArguments
+from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainerCallback, TrainingArguments
+from run_artifacts import RunArtifacts
 from training_config import load_training_config
 from xformers_vision import enable_xformers_vision_attention
 
@@ -24,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=root / "configs/apps/avantage.yaml")
     parser.add_argument("--print-config", action="store_true", help="Print the resolved YAML configuration and exit")
+    parser.add_argument("--resume", action="store_true", help="Resume the latest checkpoint in the new run artifact layout")
     return parser.parse_args()
 
 
@@ -68,24 +71,30 @@ class GroundingCollator:
         return batch
 
 
-def main() -> None:
-    args = parse_args()
-    try:
-        config = load_training_config(args.config)
-    except ValueError as error:
-        raise SystemExit(f"error: {error}") from error
-    if args.print_config:
-        print(json.dumps(config.as_json(), indent=2))
-        return
+class ArtifactCallback(TrainerCallback):
+    """Persist metrics and publish adapters independently from Trainer checkpoints."""
 
-    if not config.train.is_file() or not config.validation.is_file():
-        raise FileNotFoundError(f"processed dataset is incomplete for {config.app_id}; run prepare_grounding_data.py first")
-    if not config.manifest.is_file():
-        raise FileNotFoundError(f"missing dataset manifest for {config.app_id}; run prepare_grounding_data.py first")
-    manifest = json.loads(config.manifest.read_text(encoding="utf-8"))
-    if manifest.get("app_id") != config.app_id:
-        raise ValueError(f"dataset manifest app_id does not match configuration: {config.app_id}")
+    def __init__(self, artifacts: RunArtifacts) -> None:
+        self.artifacts = artifacts
 
+    def on_log(self, args: TrainingArguments, state: Any, control: Any, logs: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+        if logs:
+            self.artifacts.record_metrics(state.global_step, state.epoch, logs)
+        return control
+
+    def on_evaluate(self, args: TrainingArguments, state: Any, control: Any, metrics: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+        if metrics and self.artifacts.should_export_best(metrics.get("eval_loss")):
+            self.artifacts.export_adapter(kwargs["model"], "best", state.global_step, state.epoch, float(metrics["eval_loss"]))
+        return control
+
+    def on_save(self, args: TrainingArguments, state: Any, control: Any, **kwargs: Any) -> Any:
+        self.artifacts.export_adapter(kwargs["model"], "last", state.global_step, state.epoch)
+        return control
+
+
+def build_trainer(config: Any, artifacts: RunArtifacts) -> Trainer:
+    if find_spec("tensorboard") is None:
+        raise RuntimeError("TensorBoard is required for training records; run scripts/create_environment.sh")
     if not (config.model / "config.json").is_file():
         raise FileNotFoundError(f"not a local model directory: {config.model}")
     compute_dtype = getattr(torch, config.compute_dtype)
@@ -135,9 +144,9 @@ def main() -> None:
         model.is_parallelizable = True
         model.model_parallel = True
     model.print_trainable_parameters()
-    config.output.mkdir(parents=True, exist_ok=True)
     training_args = TrainingArguments(
-        output_dir=str(config.output), num_train_epochs=config.num_train_epochs, learning_rate=config.learning_rate,
+        output_dir=str(config.checkpoints), logging_dir=str(config.records / "tensorboard"),
+        num_train_epochs=config.num_train_epochs, learning_rate=config.learning_rate,
         per_device_train_batch_size=config.per_device_train_batch_size,
         per_device_eval_batch_size=config.per_device_eval_batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
@@ -145,21 +154,59 @@ def main() -> None:
         gradient_checkpointing=False, bf16=True, logging_steps=config.logging_steps,
         lr_scheduler_type=config.lr_scheduler_type, warmup_ratio=config.warmup_ratio,
         eval_strategy=config.evaluation_strategy, save_strategy=config.save_strategy,
-        save_total_limit=config.save_total_limit, report_to=[], remove_unused_columns=False, seed=config.seed,
+        save_total_limit=config.save_total_limit, report_to=["tensorboard"], remove_unused_columns=False, seed=config.seed,
     )
-    trainer = Trainer(
+    return Trainer(
         model=model, args=training_args, train_dataset=GroundingDataset(config.train),
-        eval_dataset=GroundingDataset(config.validation), data_collator=GroundingCollator(processor),
+        eval_dataset=GroundingDataset(config.validation), data_collator=GroundingCollator(processor), callbacks=[ArtifactCallback(artifacts)],
     )
-    trainer.train()
-    trainer.save_model(str(config.output))
-    processor.save_pretrained(config.output)
-    (config.output / "run_config.json").write_text(json.dumps(config.as_json(), indent=2) + "\n", encoding="utf-8")
-    (config.output / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    (config.output / "run_metadata.json").write_text(
-        json.dumps({"app_id": config.app_id, "run_name": config.run_name}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+
+
+def main() -> None:
+    args = parse_args()
+    try:
+        config = load_training_config(args.config)
+    except ValueError as error:
+        raise SystemExit(f"error: {error}") from error
+    if args.print_config:
+        print(json.dumps(config.as_json(), indent=2))
+        return
+
+    if not config.train.is_file() or not config.validation.is_file():
+        raise FileNotFoundError(f"processed dataset is incomplete for {config.app_id}; run prepare_grounding_data.py first")
+    if not config.manifest.is_file():
+        raise FileNotFoundError(f"missing dataset manifest for {config.app_id}; run prepare_grounding_data.py first")
+    manifest = json.loads(config.manifest.read_text(encoding="utf-8"))
+    if manifest.get("app_id") != config.app_id:
+        raise ValueError(f"dataset manifest app_id does not match configuration: {config.app_id}")
+    artifacts = RunArtifacts(config.output, config.as_json(), manifest, config.app_id, config.run_name)
+    resume_checkpoint = artifacts.prepare(args.resume)
+    try:
+        trainer = build_trainer(config, artifacts)
+    except KeyboardInterrupt:
+        artifacts.write_status("interrupted", global_step=0, epoch=None, best_eval_loss=artifacts.best_eval_loss())
+        raise
+    except BaseException as error:
+        artifacts.write_status("failed", global_step=0, epoch=None, best_eval_loss=artifacts.best_eval_loss(), error_type=type(error).__name__)
+        raise
+    try:
+        trainer.train(resume_from_checkpoint=str(resume_checkpoint) if resume_checkpoint else None)
+    except KeyboardInterrupt:
+        export_error: str | None = None
+        try:
+            artifacts.export_adapter(trainer.model, "last", trainer.state.global_step, trainer.state.epoch)
+        except Exception as error:
+            export_error = type(error).__name__
+        artifacts.write_status("interrupted", global_step=trainer.state.global_step, epoch=trainer.state.epoch,
+                               best_eval_loss=artifacts.best_eval_loss(), adapter_export_error=export_error)
+        raise
+    except BaseException as error:
+        artifacts.write_status("failed", global_step=trainer.state.global_step, epoch=trainer.state.epoch,
+                               best_eval_loss=artifacts.best_eval_loss(), error_type=type(error).__name__)
+        raise
+    artifacts.export_adapter(trainer.model, "last", trainer.state.global_step, trainer.state.epoch)
+    artifacts.write_status("completed", global_step=trainer.state.global_step, epoch=trainer.state.epoch,
+                           best_eval_loss=artifacts.best_eval_loss())
 
 
 if __name__ == "__main__":

@@ -68,6 +68,18 @@ class TrainingConfig:
     def output(self) -> Path:
         return self.output_root / self.app_id / self.run_name
 
+    @property
+    def adapters(self) -> Path:
+        return self.output / "adapters"
+
+    @property
+    def checkpoints(self) -> Path:
+        return self.output / "checkpoints"
+
+    @property
+    def records(self) -> Path:
+        return self.output / "records"
+
     def as_json(self) -> dict[str, object]:
         """Return a JSON-safe snapshot with all paths fully resolved."""
         values = asdict(self)
@@ -85,6 +97,9 @@ class TrainingConfig:
         values["validation"] = str(self.validation)
         values["manifest"] = str(self.manifest)
         values["output"] = str(self.output)
+        values["adapters"] = str(self.adapters)
+        values["checkpoints"] = str(self.checkpoints)
+        values["records"] = str(self.records)
         return values
 
 
