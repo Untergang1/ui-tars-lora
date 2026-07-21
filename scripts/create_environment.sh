@@ -15,7 +15,9 @@ else
   cp --reflink=auto -a "$SOURCE_PREFIX" "$TARGET_PREFIX"
 fi
 
+# TensorBoard 2.18 imports pkg_resources, which setuptools 81+ removed.
 "$TARGET_PREFIX/bin/python" -m pip install --index-url "$PYPI_MIRROR" \
+  'setuptools>=65,<81' \
   'peft==0.14.0' \
   'accelerate==1.3.0' \
   'datasets==3.2.0' \
@@ -26,7 +28,10 @@ fi
 
 "$TARGET_PREFIX/bin/python" - <<'PY'
 import importlib.metadata as metadata
-for package in ('torch', 'transformers', 'peft', 'accelerate', 'datasets', 'bitsandbytes', 'qwen-vl-utils', 'PyYAML', 'tensorboard', 'xformers'):
+for package in ('torch', 'transformers', 'setuptools', 'peft', 'accelerate', 'datasets', 'bitsandbytes', 'qwen-vl-utils', 'PyYAML', 'tensorboard', 'xformers'):
     print(f'{package}={metadata.version(package)}')
+
+import pkg_resources
+print(f'pkg_resources={pkg_resources.__file__}')
 PY
 mkdir -p "$PROJECT_ROOT/.cache/huggingface"
