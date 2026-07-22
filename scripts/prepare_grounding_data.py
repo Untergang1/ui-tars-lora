@@ -91,6 +91,7 @@ def load_rows(config: TrainingConfig) -> list[dict[str, object]]:
         validated.append(
             {
                 "id": item_id,
+                "dataset_version": config.dataset_version,
                 "image": image_name,
                 "image_path": str(image_path),
                 "image_sha256": sha256_file(image_path),
@@ -149,6 +150,7 @@ def make_training_records(rows: list[dict[str, object]], config: TrainingConfig,
             {
                 "id": row["id"],
                 "app_id": config.app_id,
+                "dataset_version": config.dataset_version,
                 "image": row["image_path"],
                 "image_name": row["image"],
                 "image_sha256": row["image_sha256"],
@@ -195,6 +197,8 @@ def main() -> None:
     }
     manifest = {
         "app_id": config.app_id,
+        "dataset_version": config.dataset_version,
+        "dataset_root": str(config.dataset_root),
         "annotation_file": str(config.annotations.resolve()),
         "annotation_sha256": sha256_file(config.annotations),
         "images_dir": str(config.images.resolve()),

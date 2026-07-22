@@ -30,10 +30,11 @@ class GroundingDataTests(unittest.TestCase):
         return path
 
     def write_annotations(self, root: Path) -> None:
-        images = root / "images"
-        images.mkdir()
+        dataset_root = root / "v1"
+        images = dataset_root / "images"
+        images.mkdir(parents=True)
         Image.new("RGB", (10, 10)).save(images / "shared.png")
-        with (root / "annotations.csv").open("w", newline="", encoding="utf-8") as handle:
+        with (dataset_root / "annotations.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
             writer.writerow(("id", "image", "description", "left", "top", "right", "bottom", "app_version"))
             writer.writerow(("first", "shared.png", "first target", 2, 2, 6, 6, "1.0"))
@@ -56,6 +57,7 @@ class GroundingDataTests(unittest.TestCase):
             self.assertEqual([row["id"] for row in train], [row["id"] for row in again_train])
             self.assertEqual([row["id"] for row in validation], [row["id"] for row in again_validation])
             self.assertTrue(all(record["app_id"] == "test-app" for record in records))
+            self.assertTrue(all(record["dataset_version"] == "v1" for record in records))
             first = next(record for record in records if record["id"] == "first")
             self.assertEqual(first["bbox_center"], {"x": 3.5, "y": 3.5})
             self.assertEqual(first["target_coordinate"], {"x": 4, "y": 4, "width": 10, "height": 10})
@@ -66,7 +68,7 @@ class GroundingDataTests(unittest.TestCase):
             root = Path(directory) / "test-app"
             root.mkdir()
             self.write_annotations(root)
-            csv_path = root / "annotations.csv"
+            csv_path = root / "v1" / "annotations.csv"
             content = csv_path.read_text(encoding="utf-8").replace("0,0,1,1,1.1", "0,0,0,1,1.1")
             csv_path.write_text(content, encoding="utf-8")
             config = load_training_config(self.write_config(root))
@@ -78,7 +80,7 @@ class GroundingDataTests(unittest.TestCase):
             root = Path(directory) / "test-app"
             root.mkdir()
             self.write_annotations(root)
-            csv_path = root / "annotations.csv"
+            csv_path = root / "v1" / "annotations.csv"
             content = csv_path.read_text(encoding="utf-8").replace("1.0", " ", 1)
             csv_path.write_text(content, encoding="utf-8")
 

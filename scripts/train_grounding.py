@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Trainer, TrainerCallback, TrainingArguments
 from grounding_metrics import aggregate, score_label
 from run_artifacts import RunArtifacts
-from training_config import load_training_config
+from training_config import load_training_config, validate_dataset_manifest
 from xformers_vision import enable_xformers_vision_attention
 
 
@@ -279,8 +279,7 @@ def main() -> None:
     if not config.manifest.is_file():
         raise FileNotFoundError(f"missing dataset manifest for {config.app_id}; run prepare_grounding_data.py first")
     manifest = json.loads(config.manifest.read_text(encoding="utf-8"))
-    if manifest.get("app_id") != config.app_id:
-        raise ValueError(f"dataset manifest app_id does not match configuration: {config.app_id}")
+    validate_dataset_manifest(config, manifest)
     artifacts = RunArtifacts(config.output, config.as_json(), manifest, config.app_id, config.run_name)
     resume_checkpoint = artifacts.prepare(args.resume)
     try:

@@ -20,9 +20,14 @@ Every application has a separate ignored data root:
 
 ```text
 data/<app_id>/
-  images/                 # sensitive PNG/JPEG screenshots
-  annotations.csv         # sensitive bbox labels
-  processed/              # generated JSONL and manifest
+  v1/                     # complete, immutable dataset snapshot
+    images/               # sensitive PNG/JPEG screenshots
+    annotations.csv       # sensitive bbox labels
+    processed/            # generated JSONL and manifest
+  v2/                     # next complete snapshot
+    images/
+    annotations.csv
+    processed/
 outputs/<app_id>/<run_name>/
   adapters/
     last/               # latest deployable PEFT adapter
@@ -33,14 +38,15 @@ outputs/<app_id>/<run_name>/
 configs/apps/<app_id>.yaml
 ```
 
-`<app_id>` is a stable lowercase slug such as `avantage` or `omnic`. The
-application YAML is the single source of truth for data paths, split settings,
-training parameters, and output isolation. Application profiles are local and
-ignored by Git; copy `configs/apps/app.template.yaml` to create one.
+`<app_id>` is a stable lowercase slug such as `avantage` or `omnic`.
+`dataset_version` selects a complete snapshot named `v1`, `v2`, `v3`, and so
+on. The application YAML is the single source of truth for data paths, split
+settings, training parameters, and output isolation. Application profiles are
+local and ignored by Git; copy `configs/apps/app.template.yaml` to create one.
 
 ## BBox Annotation Format
 
-Create `data/<app_id>/annotations.csv` with this exact header:
+Create `data/<app_id>/<dataset_version>/annotations.csv` with this exact header:
 
 ```csv
 id,image,description,left,top,right,bottom,app_version
@@ -64,6 +70,25 @@ toolbar-acquire-001,main-window.png,The "Acquire" button in the spectrum toolbar
 Screenshots and CSV files are sensitive and ignored by Git. Remove account
 names, identifiers, paths, and other retained material before annotation.
 
+## Dataset Versions
+
+Each `vN` directory is a complete snapshot. Never edit an existing version;
+create the next version by copying its predecessor, then change only the new
+copy and regenerate its `processed/` directory:
+
+```bash
+cp -a data/<app_id>/v1 data/<app_id>/v2
+# Update data/<app_id>/v2/images/ and data/<app_id>/v2/annotations.csv.
+# Set dataset_version: v2 and a new run_name in the local application YAML.
+python3 scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml
+```
+
+For a legacy flat application root, first move `images/`, `annotations.csv`,
+and `processed/` into `v1/`, then regenerate `v1/processed/`. This rebuild is
+required because generated records contain resolved image paths. Existing output
+runs remain historical artifacts and must not be resumed with the migrated
+configuration.
+
 ## Workflow
 
 1. Run `scripts/check_runtime.sh` and `scripts/copy_model.sh`.
@@ -74,8 +99,8 @@ names, identifiers, paths, and other retained material before annotation.
    cp configs/apps/app.template.yaml configs/apps/<app_id>.yaml
    ```
 
-   Update `app_id`, `data_root`, and `run_name` in the copied profile, then
-   prepare the data:
+   Update `app_id`, `data_root`, `dataset_version`, and `run_name` in the copied
+   profile, then prepare the selected snapshot:
 
    ```bash
    python3 scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml
@@ -83,9 +108,10 @@ names, identifiers, paths, and other retained material before annotation.
 
    It accepts any data size of at least two labels, deterministically assigns
    80%/20% train/validation label rows, and records input hashes and split IDs
-   in `processed/manifest.json`. It warns when the same screenshot appears in
-   both splits; this is expected with row-level splitting but can inflate
-   validation results.
+   in `<dataset_version>/processed/manifest.json`. The manifest is bound to its
+   application and dataset version, so training and evaluation reject a
+   different snapshot. It warns when the same screenshot appears in both splits;
+   this is expected with row-level splitting but can inflate validation results.
 
 4. Create the isolated environment with `scripts/create_environment.sh`, then
    train one application adapter (GPU 0 by default):
@@ -94,10 +120,11 @@ names, identifiers, paths, and other retained material before annotation.
    scripts/run_train.sh --gpu 0 configs/apps/<app_id>.yaml
    ```
 
-   Change `run_name` in the application YAML before a distinct experiment. The
-   resulting `outputs/<app_id>/<run_name>/` keeps deployable adapters separate
-   from resumable checkpoints and training records. `adapters/last` is refreshed
-   at every checkpoint, while `adapters/best` is refreshed whenever `eval_loss`
+   Change `run_name` before a distinct experiment, including when changing
+   dataset versions (for example, `data-v1` and `data-v2`). The resulting
+   `outputs/<app_id>/<run_name>/` keeps deployable adapters separate from
+   resumable checkpoints and training records. `adapters/last` is refreshed at
+   every checkpoint, while `adapters/best` is refreshed whenever `eval_loss`
    improves. Each adapter has application metadata and can be supplied directly
    to the service or evaluator.
 

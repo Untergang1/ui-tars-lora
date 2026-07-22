@@ -12,6 +12,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+DATASET_VERSION_PATTERN = re.compile(r"^v[1-9][0-9]*$")
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,8 @@ class TrainingConfig:
     config_path: Path
     app_id: str
     data_root: Path
+    dataset_version: str
+    dataset_root: Path
     annotations: Path
     images: Path
     processed: Path
@@ -86,6 +89,7 @@ class TrainingConfig:
         for key in (
             "config_path",
             "data_root",
+            "dataset_root",
             "annotations",
             "images",
             "processed",
@@ -106,6 +110,7 @@ class TrainingConfig:
 REQUIRED_KEYS = {
     "app_id",
     "data_root",
+    "dataset_version",
     "annotations_file",
     "images_dir",
     "processed_dir",
@@ -179,6 +184,14 @@ def _require_positive_float(values: dict[str, Any], key: str) -> float:
     return float(value)
 
 
+def validate_dataset_manifest(config: TrainingConfig, manifest: dict[str, object]) -> None:
+    """Reject processed data prepared for another application or dataset version."""
+    if manifest.get("app_id") != config.app_id:
+        raise ValueError(f"dataset manifest app_id does not match configuration: {config.app_id}")
+    if manifest.get("dataset_version") != config.dataset_version:
+        raise ValueError(f"dataset manifest version does not match configuration: {config.dataset_version}")
+
+
 def load_training_config(path: Path) -> TrainingConfig:
     """Load one complete application YAML and reject unsupported values."""
     config_path = path.expanduser().resolve()
@@ -205,9 +218,13 @@ def load_training_config(path: Path) -> TrainingConfig:
     data_root = _resolve_project_path(_require_string(loaded, "data_root"))
     if data_root.name != app_id:
         raise ValueError("data_root directory name must match app_id")
-    annotations = _resolve_under(data_root, _require_string(loaded, "annotations_file"), "annotations_file")
-    images = _resolve_under(data_root, _require_string(loaded, "images_dir"), "images_dir")
-    processed = _resolve_under(data_root, _require_string(loaded, "processed_dir"), "processed_dir")
+    dataset_version = _require_string(loaded, "dataset_version")
+    if not DATASET_VERSION_PATTERN.fullmatch(dataset_version):
+        raise ValueError("dataset_version must use the form v1, v2, v3, and so on")
+    dataset_root = _resolve_under(data_root, dataset_version, "dataset_version")
+    annotations = _resolve_under(dataset_root, _require_string(loaded, "annotations_file"), "annotations_file")
+    images = _resolve_under(dataset_root, _require_string(loaded, "images_dir"), "images_dir")
+    processed = _resolve_under(dataset_root, _require_string(loaded, "processed_dir"), "processed_dir")
     if annotations == images or annotations == processed or images == processed:
         raise ValueError("annotations_file, images_dir, and processed_dir must be distinct")
 
@@ -255,6 +272,8 @@ def load_training_config(path: Path) -> TrainingConfig:
         config_path=config_path,
         app_id=app_id,
         data_root=data_root,
+        dataset_version=dataset_version,
+        dataset_root=dataset_root,
         annotations=annotations,
         images=images,
         processed=processed,

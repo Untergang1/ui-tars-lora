@@ -20,7 +20,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from grounding_metrics import aggregate, score_label
-from training_config import TrainingConfig, load_training_config
+from training_config import TrainingConfig, load_training_config, validate_dataset_manifest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -301,11 +301,17 @@ def main() -> None:
     if not config.validation.is_file() or not config.manifest.is_file():
         raise SystemExit(f"error: processed validation data is missing for {config.app_id}; run prepare_grounding_data.py first")
     manifest = json.loads(config.manifest.read_text(encoding="utf-8"))
-    if manifest.get("app_id") != config.app_id:
-        raise SystemExit(f"error: dataset manifest app_id does not match configuration: {config.app_id}")
+    try:
+        validate_dataset_manifest(config, manifest)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
     labels = read_jsonl(config.validation)
-    if any(str(label.get("app_id", "")) != config.app_id for label in labels):
-        raise SystemExit(f"error: validation labels do not all belong to {config.app_id}")
+    if any(
+        str(label.get("app_id", "")) != config.app_id
+        or str(label.get("dataset_version", "")) != config.dataset_version
+        for label in labels
+    ):
+        raise SystemExit("error: validation labels do not all belong to the configured application and dataset version")
     evaluated_at = datetime.now(timezone.utc)
     report_path = args.report or default_report_path(config.output, evaluated_at)
     if args.report is None and report_path.exists():
@@ -322,6 +328,7 @@ def main() -> None:
     label_ids = {str(label["id"]) for label in labels}
     report = {
         "app_id": config.app_id,
+        "dataset_version": config.dataset_version,
         "evaluated_at_utc": evaluated_at.isoformat(),
         "dataset_manifest": str(config.manifest),
         "bbox_convention": "left/top inclusive; right/bottom exclusive",

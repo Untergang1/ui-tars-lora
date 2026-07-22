@@ -1,6 +1,7 @@
-# Copy this file to configs/apps/<application>.yaml and update app_id/run_name.
+# Copy this file to configs/apps/<application>.yaml and update app_id, dataset_version, and run_name.
 app_id: example-app
 data_root: data/example-app
+dataset_version: v1
 annotations_file: annotations.csv
 images_dir: images
 processed_dir: processed

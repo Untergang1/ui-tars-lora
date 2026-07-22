@@ -13,7 +13,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from training_config import load_training_config  # noqa: E402
+from training_config import load_training_config, validate_dataset_manifest  # noqa: E402
 
 
 class TrainingConfigTests(unittest.TestCase):
@@ -25,8 +25,10 @@ class TrainingConfigTests(unittest.TestCase):
 
         self.assertEqual(config.app_id, "example-app")
         self.assertEqual(config.data_root, PROJECT_ROOT / "data/example-app")
-        self.assertEqual(config.train, PROJECT_ROOT / "data/example-app/processed/train.jsonl")
-        self.assertEqual(config.validation, PROJECT_ROOT / "data/example-app/processed/validation.jsonl")
+        self.assertEqual(config.dataset_version, "v1")
+        self.assertEqual(config.dataset_root, PROJECT_ROOT / "data/example-app/v1")
+        self.assertEqual(config.train, PROJECT_ROOT / "data/example-app/v1/processed/train.jsonl")
+        self.assertEqual(config.validation, PROJECT_ROOT / "data/example-app/v1/processed/validation.jsonl")
         self.assertEqual(config.output, PROJECT_ROOT / "outputs/example-app/baseline")
         self.assertEqual(config.adapters, PROJECT_ROOT / "outputs/example-app/baseline/adapters")
         self.assertEqual(config.checkpoints, PROJECT_ROOT / "outputs/example-app/baseline/checkpoints")
@@ -61,6 +63,21 @@ class TrainingConfigTests(unittest.TestCase):
             handle.flush()
             with self.assertRaisesRegex(ValueError, "data_root directory name must match app_id"):
                 load_training_config(Path(handle.name))
+
+    def test_dataset_version_must_be_a_positive_v_number(self) -> None:
+        values = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        values["dataset_version"] = "release-1"
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as handle:
+            yaml.safe_dump(values, handle)
+            handle.flush()
+            with self.assertRaisesRegex(ValueError, "dataset_version must use the form"):
+                load_training_config(Path(handle.name))
+
+    def test_manifest_must_match_the_selected_dataset_version(self) -> None:
+        config = load_training_config(self.config_path)
+
+        with self.assertRaisesRegex(ValueError, "manifest version"):
+            validate_dataset_manifest(config, {"app_id": "example-app", "dataset_version": "v2"})
 
     def test_invalid_checkpointing_value_is_rejected(self) -> None:
         values = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
