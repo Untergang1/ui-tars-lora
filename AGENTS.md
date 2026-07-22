@@ -52,8 +52,14 @@ Qwen3-VL implementations and history.
 
 ## Data and Contract Rules
 
-- Treat screenshots and annotation CSV files as sensitive. Do not add them to
-  Git or expose account names, identifiers, paths, or other retained material.
+- Treat screenshots, and any account or personally identifying content they
+  contain, as sensitive. Do not add screenshots or annotation CSV source files
+  to Git.
+- Dataset record IDs (the CSV `id` field), application IDs (`app_id`), and
+  repository-relative dataset paths are operational metadata, not sensitive
+  information merely because they identify data. They may be listed in
+  conversations when useful; do not expose account names or other genuinely
+  sensitive content contained in the source material.
 - Each application has its own lowercase-slug directory, YAML profile, processed
   data, and LoRA output. The caller must explicitly select the application;
   never infer it from a screenshot or mix application records.
