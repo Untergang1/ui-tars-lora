@@ -162,14 +162,15 @@ configuration.
      scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml --gpu 1
    ```
 
-   To evaluate an application adapter instead, pass its absolute path. The
+   To evaluate an application adapter instead, pass its path. Relative paths
+   are resolved from the current working directory before vLLM starts, and the
    adapter metadata must belong to the selected application:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py \
      --config configs/apps/<app_id>.yaml \
-     --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best"
+     --adapter outputs/<app_id>/<run_name>/adapters/best
    ```
 
    To expose an adapter as a persistent local vLLM service instead, use:

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 import json
+import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -102,6 +103,21 @@ class EvaluationTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "belongs"):
                 validate_adapter(adapter, "avantage")
+
+    def test_relative_adapter_path_is_resolved_to_an_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapter = Path(temporary_directory) / "adapter"
+            adapter.mkdir()
+            (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (adapter / "run_metadata.json").write_text('{"app_id": "avantage"}', encoding="utf-8")
+            previous_directory = Path.cwd()
+            os.chdir(temporary_directory)
+            try:
+                resolved = validate_adapter(Path("adapter"), "avantage")
+            finally:
+                os.chdir(previous_directory)
+
+            self.assertEqual(resolved, adapter.resolve())
 
     def test_request_response_sends_the_validation_image_and_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

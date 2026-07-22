@@ -37,7 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs/apps/avantage.yaml")
     parser.add_argument("--responses", type=Path, help="Existing JSONL objects with id and response fields")
     parser.add_argument("--report", type=Path, help="Overrides the timestamped report path")
-    parser.add_argument("--adapter", type=Path, help="Absolute LoRA adapter path; defaults to the native model")
+    parser.add_argument(
+        "--adapter",
+        type=Path,
+        help="LoRA adapter path, resolved from the current working directory; defaults to the native model",
+    )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Temporary vLLM port (default: {DEFAULT_PORT})")
     parser.add_argument(
         "--gpu", type=int, default=DEFAULT_GPU,
@@ -99,8 +103,6 @@ def validate_automatic_args(args: argparse.Namespace) -> None:
 
 
 def validate_adapter(adapter: Path, app_id: str) -> Path:
-    if not adapter.is_absolute():
-        raise ValueError("adapter path must be absolute")
     resolved = adapter.resolve()
     if not (resolved / "adapter_config.json").is_file():
         raise ValueError(f"not a PEFT adapter directory: {resolved}")
