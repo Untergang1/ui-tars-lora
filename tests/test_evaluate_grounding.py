@@ -18,11 +18,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from evaluate_grounding import (  # noqa: E402
     TemporaryVllmService,
+    adapter_uses_visual_lora,
     aggregate,
     default_report_path,
+    infer_responses,
+    infer_transformers_responses,
     request_response,
     resolve_adapter,
     score_label,
+    select_backend,
     validate_adapter,
     validate_automatic_args,
     vllm_command,
@@ -165,6 +169,76 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertEqual(resolved, explicit.resolve())
             self.assertEqual(source, "explicit_argument")
+
+    def test_visual_lora_detection_uses_peft_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapter = Path(temporary_directory)
+            (adapter / "adapter_config.json").write_text(
+                json.dumps({"target_modules": ["q_proj", "visual.merger.mlp.2"]}), encoding="utf-8"
+            )
+
+            self.assertTrue(adapter_uses_visual_lora(adapter))
+
+    def test_language_only_lora_does_not_use_transformers_automatically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapter = Path(temporary_directory)
+            (adapter / "adapter_config.json").write_text(json.dumps({"target_modules": ["q_proj"]}), encoding="utf-8")
+
+            self.assertFalse(adapter_uses_visual_lora(adapter))
+            self.assertEqual(select_backend("auto", False), "vllm")
+            self.assertEqual(select_backend("auto", True), "transformers")
+
+    def test_vllm_rejects_visual_lora(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot apply"):
+            select_backend("vllm", True)
+
+    @patch("evaluate_grounding.transformers_response", return_value="(10, 20)")
+    @patch("evaluate_grounding.load_transformers_model")
+    @patch("evaluate_grounding.prepare_transformers_environment")
+    def test_transformers_inference_records_exact_adapter_metadata(
+        self,
+        mocked_environment: MagicMock,
+        mocked_loader: MagicMock,
+        mocked_response: MagicMock,
+    ) -> None:
+        config = SimpleNamespace(model=Path("models/UI-TARS-1.5-7B"))
+        adapter = Path("outputs/avantage/v4_2/adapters/best")
+        args = SimpleNamespace(gpu=1, max_tokens=32)
+        mocked_loader.return_value = (MagicMock(), MagicMock(), MagicMock())
+        label = {"id": "target", "image": "data/avantage/images/screen.png", "prompt": "Locate target"}
+
+        responses, inference = infer_transformers_responses(
+            config, [label], args, adapter, "config_run_name", True
+        )
+
+        mocked_environment.assert_called_once_with(1)
+        mocked_loader.assert_called_once_with(config, adapter)
+        mocked_response.assert_called_once_with(
+            mocked_loader.return_value[0],
+            mocked_loader.return_value[1],
+            mocked_loader.return_value[2],
+            label,
+            32,
+        )
+        self.assertEqual(responses, {"target": "(10, 20)"})
+        self.assertEqual(inference["backend"], "transformers")
+        self.assertEqual(inference["mode"], "transformers_lora")
+        self.assertTrue(inference["adapter_has_visual_lora"])
+
+    def test_auto_backend_uses_transformers_for_visual_lora(self) -> None:
+        config = SimpleNamespace(app_id="avantage", adapters=Path("outputs/avantage/v4_2/adapters"))
+        args = SimpleNamespace(adapter=None, backend="auto", gpu=1, max_tokens=32)
+        adapter = Path("outputs/avantage/v4_2/adapters/best")
+
+        with (
+            patch("evaluate_grounding.resolve_adapter", return_value=(adapter, "config_run_name")),
+            patch("evaluate_grounding.adapter_uses_visual_lora", return_value=True),
+            patch("evaluate_grounding.infer_transformers_responses", return_value=({}, {"backend": "transformers"})) as mocked_infer,
+        ):
+            _, inference = infer_responses(config, [], args)
+
+        mocked_infer.assert_called_once_with(config, [], args, adapter, "config_run_name", True)
+        self.assertEqual(inference["backend"], "transformers")
 
     def test_inference_records_adapter_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

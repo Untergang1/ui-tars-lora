@@ -11,6 +11,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ DEFAULT_GPU = 1
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 300.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_TOKENS = 128
+BACKENDS = ("auto", "vllm", "transformers")
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +47,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Temporary vLLM port (default: {DEFAULT_PORT})")
     parser.add_argument(
         "--gpu", type=int, default=DEFAULT_GPU,
-        help=f"GPU index for the temporary vLLM service (default: {DEFAULT_GPU})",
+        help=f"GPU index for automatic inference (default: {DEFAULT_GPU})",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default="auto",
+        help="Inference backend: auto selects Transformers for visual LoRA and vLLM otherwise",
     )
     parser.add_argument("--startup-timeout", type=float, default=DEFAULT_STARTUP_TIMEOUT_SECONDS)
     parser.add_argument("--request-timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
@@ -87,17 +95,22 @@ def is_port_in_use(port: int) -> bool:
         return connection.connect_ex(("127.0.0.1", port)) == 0
 
 
-def validate_automatic_args(args: argparse.Namespace) -> None:
+def validate_common_inference_args(args: argparse.Namespace) -> None:
     if args.gpu < 0:
         raise ValueError("gpu must be a non-negative integer")
+    if args.max_tokens <= 0:
+        raise ValueError("max-tokens must be positive")
+
+
+def validate_automatic_args(args: argparse.Namespace) -> None:
+    """Validate options used only when automatic inference starts vLLM."""
+    validate_common_inference_args(args)
     if args.port == 18000:
         raise ValueError("port 18000 is reserved for the production service")
     if not 1 <= args.port <= 65535:
         raise ValueError("port must be between 1 and 65535")
     if args.startup_timeout <= 0 or args.request_timeout <= 0:
         raise ValueError("startup and request timeouts must be positive")
-    if args.max_tokens <= 0:
-        raise ValueError("max-tokens must be positive")
     if is_port_in_use(args.port):
         raise ValueError(f"port {args.port} is already in use")
 
@@ -127,6 +140,34 @@ def resolve_adapter(config: TrainingConfig, requested_adapter: Path | None) -> t
     if not config.adapters.is_dir():
         raise ValueError(f"adapters path is not a directory: {config.adapters}")
     return validate_adapter(config.adapters / "best", config.app_id), "config_run_name"
+
+
+def adapter_uses_visual_lora(adapter: Path | None) -> bool:
+    """Detect LoRA targets vLLM cannot apply to a multimodal model."""
+    if adapter is None:
+        return False
+    config_path = adapter / "adapter_config.json"
+    try:
+        adapter_config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid PEFT adapter config: {config_path}: {exc}") from exc
+    target_modules = adapter_config.get("target_modules")
+    if not isinstance(target_modules, list) or any(not isinstance(module, str) for module in target_modules):
+        raise ValueError(f"invalid PEFT target_modules in {config_path}")
+    return any(module == "visual" or module.startswith("visual.") for module in target_modules)
+
+
+def select_backend(requested_backend: str, has_visual_lora: bool) -> str:
+    if requested_backend not in BACKENDS:
+        raise ValueError(f"unsupported backend: {requested_backend}")
+    if requested_backend == "auto":
+        return "transformers" if has_visual_lora else "vllm"
+    if requested_backend == "vllm" and has_visual_lora:
+        raise ValueError(
+            "the adapter contains visual LoRA, which vLLM cannot apply to multimodal models; "
+            "use --backend transformers or --backend auto"
+        )
+    return requested_backend
 
 
 def vllm_command(
@@ -290,9 +331,123 @@ def request_response(base_url: str, model: str, label: dict[str, object], timeou
     return content
 
 
+def prepare_transformers_environment(gpu: int) -> None:
+    """Select the evaluation GPU before importing CUDA-aware libraries."""
+    torch_module = sys.modules.get("torch")
+    if torch_module is not None and torch_module.cuda.is_initialized():
+        raise RuntimeError("Transformers evaluation must start before CUDA is initialized")
+    os.environ.update(
+        {
+            "CUDA_VISIBLE_DEVICES": str(gpu),
+            "HF_HOME": str(PROJECT_ROOT / ".cache/huggingface"),
+            "HF_HUB_CACHE": str(PROJECT_ROOT / ".cache/huggingface/hub"),
+            "TOKENIZERS_PARALLELISM": "false",
+        }
+    )
+
+
+def load_transformers_model(config: TrainingConfig, adapter: Path | None) -> tuple[Any, Any, Any]:
+    """Load the local QLoRA base model and optionally attach its PEFT adapter."""
+    if not config.model.is_dir():
+        raise ValueError(f"base model does not exist: {config.model}; run scripts/copy_model.sh first")
+    try:
+        import torch
+        from peft import PeftModel
+        from qwen_vl_utils import process_vision_info
+        from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+    except ImportError as exc:
+        raise RuntimeError("Transformers evaluation dependencies are missing; run scripts/create_environment.sh") from exc
+
+    from xformers_vision import enable_xformers_vision_attention
+
+    quantization = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    processor = AutoProcessor.from_pretrained(config.model, local_files_only=True)
+    model = AutoModelForVision2Seq.from_pretrained(
+        config.model,
+        quantization_config=quantization,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        local_files_only=True,
+    )
+    enable_xformers_vision_attention(model)
+    if adapter is not None:
+        model = PeftModel.from_pretrained(model, adapter, is_trainable=False)
+    model.eval()
+    return model, processor, process_vision_info
+
+
+def transformers_response(model: Any, processor: Any, process_vision_info: Any, label: dict[str, object], max_tokens: int) -> str:
+    image_path = Path(str(label["image"]))
+    if not image_path.is_file():
+        raise ValueError(f"validation image does not exist: {image_path}")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": str(image_path)},
+                {"type": "text", "text": str(label["prompt"])},
+            ],
+        }
+    ]
+    prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(text=[prompt], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+    device = next(model.parameters()).device
+    inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
+    prompt_length = int(inputs["input_ids"].shape[1])
+    generated = model.generate(
+        **inputs,
+        do_sample=False,
+        num_beams=1,
+        max_new_tokens=max_tokens,
+        use_cache=True,
+    )
+    return processor.batch_decode(
+        generated[:, prompt_length:], skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )[0]
+
+
+def infer_transformers_responses(
+    config: TrainingConfig,
+    labels: list[dict[str, object]],
+    args: argparse.Namespace,
+    adapter: Path | None,
+    adapter_source: str,
+    has_visual_lora: bool,
+) -> tuple[dict[str, object], dict[str, object]]:
+    validate_common_inference_args(args)
+    prepare_transformers_environment(args.gpu)
+    model, processor, process_vision_info = load_transformers_model(config, adapter)
+    responses: dict[str, object] = {}
+    for index, label in enumerate(labels, start=1):
+        item_id = str(label["id"])
+        print(f"Evaluating {index}/{len(labels)}: {item_id}", flush=True)
+        responses[item_id] = transformers_response(model, processor, process_vision_info, label, args.max_tokens)
+    return responses, {
+        "mode": "transformers_lora" if adapter is not None else "transformers_native",
+        "backend": "transformers",
+        "model": str(config.model),
+        "adapter": str(adapter) if adapter is not None else None,
+        "adapter_source": adapter_source,
+        "adapter_has_visual_lora": has_visual_lora,
+        "gpu": args.gpu,
+        "max_tokens": args.max_tokens,
+    }
+
+
 def infer_responses(config: TrainingConfig, labels: list[dict[str, object]], args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
-    validate_automatic_args(args)
     adapter, adapter_source = resolve_adapter(config, args.adapter)
+    has_visual_lora = adapter_uses_visual_lora(adapter)
+    backend = select_backend(args.backend, has_visual_lora)
+    if backend == "transformers":
+        return infer_transformers_responses(config, labels, args, adapter, adapter_source, has_visual_lora)
+
+    validate_automatic_args(args)
     command, request_model, inference = vllm_command(config, args.port, adapter, adapter_source)
     responses: dict[str, object] = {}
     with TemporaryVllmService(command, args.port, args.startup_timeout, args.gpu) as base_url:
@@ -302,6 +457,8 @@ def infer_responses(config: TrainingConfig, labels: list[dict[str, object]], arg
             responses[item_id] = request_response(base_url, request_model, label, args.request_timeout, args.max_tokens)
     inference.update(
         {
+            "backend": "vllm",
+            "adapter_has_visual_lora": has_visual_lora,
             "gpu": args.gpu,
             "port": args.port,
             "max_tokens": args.max_tokens,

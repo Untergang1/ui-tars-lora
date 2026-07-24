@@ -156,16 +156,23 @@ configuration.
    the TensorBoard dependency. Older flat-layout runs are intentionally not
    resumable through this command.
 
-5. Evaluate the held-out validation set automatically. The evaluation command
-   starts an evaluation-only vLLM service on GPU 1 by default and port 18001, reads
+5. Evaluate the held-out validation set automatically. The command reads
    `processed/validation.jsonl`, sends each screenshot and grounding prompt to
-   the current run's `adapters/best` LoRA adapter, scores the responses, and
-   stops the service when it is done:
+   the current run's `adapters/best` LoRA adapter, and scores the responses.
+   By default, language-only adapters run through an evaluation-only vLLM service
+   on GPU 1 and port 18001. Adapters that target `visual.*` modules run through
+   local Transformers/PEFT inference so vLLM cannot silently ignore their visual
+   LoRA weights:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml --gpu 1
    ```
+
+   Use `--backend vllm` or `--backend transformers` to override automatic
+   selection. vLLM rejects adapters with visual LoRA rather than evaluating them
+   with ignored weights. The Transformers backend does not start a service, so
+   `--port`, `--startup-timeout`, and `--request-timeout` apply only to vLLM.
 
    If `outputs/<app_id>/<run_name>/adapters/` does not exist, the same command
    evaluates the native UI-TARS model and records `adapter: null` plus the
@@ -173,8 +180,8 @@ configuration.
    valid `best` adapter; evaluation fails rather than silently falling back.
 
    To override the adapter selected from the configuration, pass its path.
-   Relative paths are resolved from the current working directory before vLLM
-   starts, and the adapter metadata must belong to the selected application:
+   Relative paths are resolved from the current working directory before
+   inference starts, and the adapter metadata must belong to the selected application:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
@@ -183,14 +190,17 @@ configuration.
      --adapter outputs/<app_id>/<run_name>/adapters/best
    ```
 
-   To expose an adapter as a persistent local vLLM service instead, use:
+   To expose a language-only adapter as a persistent local vLLM service instead, use:
 
    ```bash
    scripts/serve_adapter.sh --app <app_id> \
      --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best" --gpu 1
    ```
 
-   The automatic mode rejects port 18000, which remains reserved for the
+   vLLM cannot serve visual LoRA targets, so use the Transformers evaluation
+   backend for adapters created with `vision_projector_lora: true`.
+
+   The vLLM backend rejects port 18000, which remains reserved for the
    production service. Use `--gpu` to select any GPU index (including GPU 2)
    when manually scheduling the workload. Use `--port`, `--startup-timeout`,
    `--request-timeout`, or `--max-tokens` only when the defaults need adjustment.
