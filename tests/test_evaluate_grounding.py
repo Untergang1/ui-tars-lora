@@ -21,9 +21,11 @@ from evaluate_grounding import (  # noqa: E402
     aggregate,
     default_report_path,
     request_response,
+    resolve_adapter,
     score_label,
     validate_adapter,
     validate_automatic_args,
+    vllm_command,
 )
 
 
@@ -118,6 +120,77 @@ class EvaluationTests(unittest.TestCase):
                 os.chdir(previous_directory)
 
             self.assertEqual(resolved, adapter.resolve())
+
+    def test_configured_run_uses_its_best_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapters = Path(temporary_directory) / "adapters"
+            adapter = adapters / "best"
+            adapter.mkdir(parents=True)
+            (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (adapter / "run_metadata.json").write_text('{"app_id": "avantage"}', encoding="utf-8")
+
+            resolved, source = resolve_adapter(SimpleNamespace(app_id="avantage", adapters=adapters), None)
+
+            self.assertEqual(resolved, adapter.resolve())
+            self.assertEqual(source, "config_run_name")
+
+    def test_missing_adapters_directory_uses_the_native_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapters = Path(temporary_directory) / "adapters"
+
+            adapter, source = resolve_adapter(SimpleNamespace(app_id="avantage", adapters=adapters), None)
+
+            self.assertIsNone(adapter)
+            self.assertEqual(source, "adapters_directory_missing")
+
+    def test_existing_adapters_directory_requires_a_valid_best_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapters = Path(temporary_directory) / "adapters"
+            adapters.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "not a PEFT adapter directory"):
+                resolve_adapter(SimpleNamespace(app_id="avantage", adapters=adapters), None)
+
+    def test_explicit_adapter_overrides_the_configured_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            explicit = root / "explicit"
+            explicit.mkdir()
+            (explicit / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (explicit / "run_metadata.json").write_text('{"app_id": "avantage"}', encoding="utf-8")
+
+            resolved, source = resolve_adapter(
+                SimpleNamespace(app_id="avantage", adapters=root / "adapters"), explicit
+            )
+
+            self.assertEqual(resolved, explicit.resolve())
+            self.assertEqual(source, "explicit_argument")
+
+    def test_inference_records_adapter_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = root / "environment"
+            executable = environment / "bin" / "vllm"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("", encoding="utf-8")
+            model = root / "model"
+            model.mkdir()
+            config = SimpleNamespace(app_id="avantage", model=model)
+
+            with patch("evaluate_grounding.CONDA_ENV", environment):
+                _, request_model, inference = vllm_command(config, 18001, None, "adapters_directory_missing")
+                _, lora_request_model, lora_inference = vllm_command(
+                    config, 18001, root / "adapter", "config_run_name"
+                )
+
+            self.assertEqual(request_model, "ui-tars-1.5-avantage-evaluation")
+            self.assertEqual(inference["mode"], "native")
+            self.assertIsNone(inference["adapter"])
+            self.assertEqual(inference["adapter_source"], "adapters_directory_missing")
+            self.assertEqual(lora_request_model, "avantage-grounding")
+            self.assertEqual(lora_inference["mode"], "lora")
+            self.assertEqual(lora_inference["adapter"], str(root / "adapter"))
+            self.assertEqual(lora_inference["adapter_source"], "config_run_name")
 
     def test_request_response_sends_the_validation_image_and_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

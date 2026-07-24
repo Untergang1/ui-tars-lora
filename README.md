@@ -159,17 +159,22 @@ configuration.
 5. Evaluate the held-out validation set automatically. The evaluation command
    starts an evaluation-only vLLM service on GPU 1 by default and port 18001, reads
    `processed/validation.jsonl`, sends each screenshot and grounding prompt to
-   the native UI-TARS model, scores the responses, and stops the service when
-   it is done:
+   the current run's `adapters/best` LoRA adapter, scores the responses, and
+   stops the service when it is done:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml --gpu 1
    ```
 
-   To evaluate an application adapter instead, pass its path. Relative paths
-   are resolved from the current working directory before vLLM starts, and the
-   adapter metadata must belong to the selected application:
+   If `outputs/<app_id>/<run_name>/adapters/` does not exist, the same command
+   evaluates the native UI-TARS model and records `adapter: null` plus the
+   fallback reason in the report. If that directory exists, it must contain a
+   valid `best` adapter; evaluation fails rather than silently falling back.
+
+   To override the adapter selected from the configuration, pass its path.
+   Relative paths are resolved from the current working directory before vLLM
+   starts, and the adapter metadata must belong to the selected application:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \

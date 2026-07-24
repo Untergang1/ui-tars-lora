@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--adapter",
         type=Path,
-        help="LoRA adapter path, resolved from the current working directory; defaults to the native model",
+        help="LoRA adapter path, resolved from the current working directory; overrides the configured run's adapters/best",
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Temporary vLLM port (default: {DEFAULT_PORT})")
     parser.add_argument(
@@ -118,7 +118,20 @@ def validate_adapter(adapter: Path, app_id: str) -> Path:
     return resolved
 
 
-def vllm_command(config: TrainingConfig, port: int, adapter: Path | None) -> tuple[list[str], str, dict[str, object]]:
+def resolve_adapter(config: TrainingConfig, requested_adapter: Path | None) -> tuple[Path | None, str]:
+    """Choose an explicit adapter or the current run's published best adapter."""
+    if requested_adapter is not None:
+        return validate_adapter(requested_adapter, config.app_id), "explicit_argument"
+    if not config.adapters.exists():
+        return None, "adapters_directory_missing"
+    if not config.adapters.is_dir():
+        raise ValueError(f"adapters path is not a directory: {config.adapters}")
+    return validate_adapter(config.adapters / "best", config.app_id), "config_run_name"
+
+
+def vllm_command(
+    config: TrainingConfig, port: int, adapter: Path | None, adapter_source: str
+) -> tuple[list[str], str, dict[str, object]]:
     executable = CONDA_ENV / "bin" / "vllm"
     if not executable.is_file():
         raise ValueError(f"missing isolated environment: {executable}; run scripts/create_environment.sh first")
@@ -142,7 +155,13 @@ def vllm_command(config: TrainingConfig, port: int, adapter: Path | None) -> tup
         "--gpu-memory-utilization",
         "0.85",
     ]
-    inference: dict[str, object] = {"mode": "native", "model": str(config.model), "served_model": served_model}
+    inference: dict[str, object] = {
+        "mode": "native",
+        "model": str(config.model),
+        "served_model": served_model,
+        "adapter": None,
+        "adapter_source": adapter_source,
+    }
     request_model = served_model
     if adapter is not None:
         lora_name = f"{config.app_id}-grounding"
@@ -273,8 +292,8 @@ def request_response(base_url: str, model: str, label: dict[str, object], timeou
 
 def infer_responses(config: TrainingConfig, labels: list[dict[str, object]], args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
     validate_automatic_args(args)
-    adapter = validate_adapter(args.adapter, config.app_id) if args.adapter is not None else None
-    command, request_model, inference = vllm_command(config, args.port, adapter)
+    adapter, adapter_source = resolve_adapter(config, args.adapter)
+    command, request_model, inference = vllm_command(config, args.port, adapter, adapter_source)
     responses: dict[str, object] = {}
     with TemporaryVllmService(command, args.port, args.startup_timeout, args.gpu) as base_url:
         for index, label in enumerate(labels, start=1):
