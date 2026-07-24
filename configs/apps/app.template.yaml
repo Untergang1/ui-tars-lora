@@ -38,4 +38,6 @@ target_modules:
   - gate_proj
   - up_proj
   - down_proj
+# Add LoRA only to the visual merger MLP, not the vision encoder blocks.
+vision_projector_lora: false
 exclude_modules: "^visual\\..*"

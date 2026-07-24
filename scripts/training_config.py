@@ -54,6 +54,7 @@ class TrainingConfig:
     lora_dropout: float
     target_modules: list[str]
     exclude_modules: str
+    vision_projector_lora: bool
 
     @property
     def train(self) -> Path:
@@ -143,6 +144,8 @@ REQUIRED_KEYS = {
     "exclude_modules",
 }
 
+OPTIONAL_KEYS = {"vision_projector_lora"}
+
 
 def _resolve_project_path(value: str) -> Path:
     path = Path(value).expanduser()
@@ -206,7 +209,7 @@ def load_training_config(path: Path) -> TrainingConfig:
 
     keys = set(loaded)
     missing = sorted(REQUIRED_KEYS - keys)
-    unexpected = sorted(keys - REQUIRED_KEYS)
+    unexpected = sorted(keys - REQUIRED_KEYS - OPTIONAL_KEYS)
     if missing:
         raise ValueError(f"training config is missing required keys: {', '.join(missing)}")
     if unexpected:
@@ -268,6 +271,10 @@ def load_training_config(path: Path) -> TrainingConfig:
     if len(target_modules) != len(set(target_modules)):
         raise ValueError("target_modules must not contain duplicates")
 
+    vision_projector_lora = loaded.get("vision_projector_lora", False)
+    if type(vision_projector_lora) is not bool:
+        raise ValueError("vision_projector_lora must be true or false")
+
     return TrainingConfig(
         config_path=config_path,
         app_id=app_id,
@@ -304,4 +311,5 @@ def load_training_config(path: Path) -> TrainingConfig:
         lora_dropout=float(lora_dropout_value),
         target_modules=target_modules,
         exclude_modules=exclude_modules,
+        vision_projector_lora=vision_projector_lora,
     )

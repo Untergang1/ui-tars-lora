@@ -106,6 +106,11 @@ configuration.
    python3 scripts/prepare_grounding_data.py --config configs/apps/<app_id>.yaml
    ```
 
+   Set `vision_projector_lora: true` in the profile to additionally train LoRA
+   adapters on UI-TARS's visual merger MLP. It remains `false` by default, so
+   existing profiles continue to train only the language-model targets; the
+   vision encoder blocks stay excluded in either mode.
+
    It accepts any data size of at least two labels, deterministically assigns
    80%/20% train/validation label rows, and records input hashes and split IDs
    in `<dataset_version>/processed/manifest.json`. The manifest is bound to its

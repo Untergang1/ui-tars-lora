@@ -22,6 +22,35 @@ from training_config import load_training_config, validate_dataset_manifest
 from xformers_vision import enable_xformers_vision_attention
 
 
+VISION_PROJECTOR_TARGET_MODULES = (
+    "visual.merger.mlp.0",
+    "visual.merger.mlp.2",
+)
+
+
+def resolve_lora_modules(config: Any) -> tuple[list[str], str]:
+    """Return PEFT targets while optionally preserving the visual merger MLP."""
+    target_modules = list(config.target_modules)
+    if not config.vision_projector_lora:
+        return target_modules, config.exclude_modules
+
+    target_modules.extend(VISION_PROJECTOR_TARGET_MODULES)
+    # Keep custom exclusions, except for the two explicitly enabled projector layers.
+    exclude_modules = (
+        rf"(?:(?!visual\.merger\.mlp\.(?:0|2)$)(?:{config.exclude_modules}))"
+        r"|(?:^visual\.(?:patch_embed|blocks)\..*)"
+    )
+    return list(dict.fromkeys(target_modules)), exclude_modules
+
+
+def is_visual_module(name: str) -> bool:
+    return name.startswith("visual.") or ".visual." in name
+
+
+def is_vision_projector_module(name: str) -> bool:
+    return any(name.endswith(target) for target in VISION_PROJECTOR_TARGET_MODULES)
+
+
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -220,6 +249,7 @@ def build_trainer(config: Any, artifacts: RunArtifacts) -> Trainer:
     # policy is separate from the language transformer's LoRA backward path.
     model.model.gradient_checkpointing = config.language_gradient_checkpointing
     model.visual.gradient_checkpointing = config.vision_gradient_checkpointing
+    target_modules, exclude_modules = resolve_lora_modules(config)
     model = get_peft_model(
         model,
         LoraConfig(
@@ -228,17 +258,25 @@ def build_trainer(config: Any, artifacts: RunArtifacts) -> Trainer:
             lora_dropout=config.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=config.target_modules,
-            exclude_modules=config.exclude_modules,
+            target_modules=target_modules,
+            exclude_modules=exclude_modules,
         ),
     )
     adapted_modules = [name for name, module in model.named_modules() if hasattr(module, "lora_A")]
-    visual_adapters = [name for name in adapted_modules if name.startswith("visual.") or ".visual." in name]
-    if visual_adapters:
+    visual_adapters = [name for name in adapted_modules if is_visual_module(name)]
+    projector_adapters = [name for name in visual_adapters if is_vision_projector_module(name)]
+    unexpected_visual_adapters = [name for name in visual_adapters if name not in projector_adapters]
+    if unexpected_visual_adapters:
+        raise RuntimeError(f"unexpected visual LoRA adapters: {unexpected_visual_adapters[:3]}")
+    if config.vision_projector_lora and len(projector_adapters) != len(VISION_PROJECTOR_TARGET_MODULES):
+        raise RuntimeError(f"expected LoRA adapters on visual projector, found: {projector_adapters}")
+    if not config.vision_projector_lora and visual_adapters:
         raise RuntimeError(f"visual modules must remain frozen, found LoRA adapters: {visual_adapters[:3]}")
-    if not adapted_modules:
+    language_adapters = [name for name in adapted_modules if not is_visual_module(name)]
+    if not language_adapters:
         raise RuntimeError("no language modules received LoRA adapters")
-    print(f"language_lora_modules={len(adapted_modules)}")
+    print(f"language_lora_modules={len(language_adapters)}")
+    print(f"vision_projector_lora_modules={len(projector_adapters)}")
     if device_map == "balanced":
         # Keep Trainer in single-process model-parallel mode instead of DDP replication.
         model.is_parallelizable = True
