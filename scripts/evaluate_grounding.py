@@ -4,34 +4,21 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import mimetypes
 import os
-import signal
-import socket
-import subprocess
 import sys
-import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from grounding_metrics import aggregate, score_label
 from training_config import TrainingConfig, load_training_config, validate_dataset_manifest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONDA_ENV = Path("/root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora")
-DEFAULT_PORT = 18001
 DEFAULT_GPU = 1
-DEFAULT_STARTUP_TIMEOUT_SECONDS = 300.0
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_TOKENS = 128
-BACKENDS = ("auto", "vllm", "transformers")
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,19 +31,10 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="LoRA adapter path, resolved from the current working directory; overrides the configured run's adapters/best",
     )
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Temporary vLLM port (default: {DEFAULT_PORT})")
     parser.add_argument(
         "--gpu", type=int, default=DEFAULT_GPU,
-        help=f"GPU index for automatic inference (default: {DEFAULT_GPU})",
+        help=f"GPU index for Transformers inference (default: {DEFAULT_GPU})",
     )
-    parser.add_argument(
-        "--backend",
-        choices=BACKENDS,
-        default="auto",
-        help="Inference backend: auto selects Transformers for visual LoRA and vLLM otherwise",
-    )
-    parser.add_argument("--startup-timeout", type=float, default=DEFAULT_STARTUP_TIMEOUT_SECONDS)
-    parser.add_argument("--request-timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     return parser.parse_args()
 
@@ -89,31 +67,11 @@ def default_report_path(output: Path, evaluated_at: datetime) -> Path:
     return output / f"eval_{evaluated_at.strftime('%m%d_%H%M%S')}.json"
 
 
-def is_port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-        connection.settimeout(0.2)
-        return connection.connect_ex(("127.0.0.1", port)) == 0
-
-
 def validate_common_inference_args(args: argparse.Namespace) -> None:
     if args.gpu < 0:
         raise ValueError("gpu must be a non-negative integer")
     if args.max_tokens <= 0:
         raise ValueError("max-tokens must be positive")
-
-
-def validate_automatic_args(args: argparse.Namespace) -> None:
-    """Validate options used only when automatic inference starts vLLM."""
-    validate_common_inference_args(args)
-    if args.port == 18000:
-        raise ValueError("port 18000 is reserved for the production service")
-    if not 1 <= args.port <= 65535:
-        raise ValueError("port must be between 1 and 65535")
-    if args.startup_timeout <= 0 or args.request_timeout <= 0:
-        raise ValueError("startup and request timeouts must be positive")
-    if is_port_in_use(args.port):
-        raise ValueError(f"port {args.port} is already in use")
-
 
 def validate_adapter(adapter: Path, app_id: str) -> Path:
     resolved = adapter.resolve()
@@ -140,195 +98,6 @@ def resolve_adapter(config: TrainingConfig, requested_adapter: Path | None) -> t
     if not config.adapters.is_dir():
         raise ValueError(f"adapters path is not a directory: {config.adapters}")
     return validate_adapter(config.adapters / "best", config.app_id), "config_run_name"
-
-
-def adapter_uses_visual_lora(adapter: Path | None) -> bool:
-    """Detect LoRA targets vLLM cannot apply to a multimodal model."""
-    if adapter is None:
-        return False
-    config_path = adapter / "adapter_config.json"
-    try:
-        adapter_config = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid PEFT adapter config: {config_path}: {exc}") from exc
-    target_modules = adapter_config.get("target_modules")
-    if not isinstance(target_modules, list) or any(not isinstance(module, str) for module in target_modules):
-        raise ValueError(f"invalid PEFT target_modules in {config_path}")
-    return any(module == "visual" or module.startswith("visual.") for module in target_modules)
-
-
-def select_backend(requested_backend: str, has_visual_lora: bool) -> str:
-    if requested_backend not in BACKENDS:
-        raise ValueError(f"unsupported backend: {requested_backend}")
-    if requested_backend == "auto":
-        return "transformers" if has_visual_lora else "vllm"
-    if requested_backend == "vllm" and has_visual_lora:
-        raise ValueError(
-            "the adapter contains visual LoRA, which vLLM cannot apply to multimodal models; "
-            "use --backend transformers or --backend auto"
-        )
-    return requested_backend
-
-
-def vllm_command(
-    config: TrainingConfig, port: int, adapter: Path | None, adapter_source: str
-) -> tuple[list[str], str, dict[str, object]]:
-    executable = CONDA_ENV / "bin" / "vllm"
-    if not executable.is_file():
-        raise ValueError(f"missing isolated environment: {executable}; run scripts/create_environment.sh first")
-    if not config.model.is_dir():
-        raise ValueError(f"base model does not exist: {config.model}; run scripts/copy_model.sh first")
-    served_model = f"ui-tars-1.5-{config.app_id}-evaluation"
-    command = [
-        str(executable),
-        "serve",
-        str(config.model),
-        "--served-model-name",
-        served_model,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--dtype",
-        "bfloat16",
-        "--max-model-len",
-        "8192",
-        "--gpu-memory-utilization",
-        "0.85",
-    ]
-    inference: dict[str, object] = {
-        "mode": "native",
-        "model": str(config.model),
-        "served_model": served_model,
-        "adapter": None,
-        "adapter_source": adapter_source,
-    }
-    request_model = served_model
-    if adapter is not None:
-        lora_name = f"{config.app_id}-grounding"
-        command.extend(["--enable-lora", "--lora-modules", f"{lora_name}={adapter}"])
-        inference.update({"mode": "lora", "adapter": str(adapter), "request_model": lora_name})
-        request_model = lora_name
-    return command, request_model, inference
-
-
-def get_json(url: str, timeout: float) -> dict[str, Any]:
-    with urlopen(url, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"expected a JSON object from {url}")
-    return payload
-
-
-def wait_for_service(process: subprocess.Popen[object], base_url: str, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    last_error = "service did not accept connections"
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"temporary vLLM service exited with status {process.returncode}")
-        try:
-            get_json(f"{base_url}/v1/models", timeout=2.0)
-            return
-        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-            last_error = str(exc)
-            time.sleep(1)
-    raise RuntimeError(f"temporary vLLM service did not become ready within {timeout:g}s: {last_error}")
-
-
-class TemporaryVllmService:
-    """Own one evaluation-only vLLM process and its GPU process group."""
-
-    def __init__(self, command: list[str], port: int, startup_timeout: float, gpu: int) -> None:
-        self.command = command
-        self.port = port
-        self.startup_timeout = startup_timeout
-        self.gpu = gpu
-        self.process: subprocess.Popen[object] | None = None
-
-    def __enter__(self) -> str:
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "CUDA_VISIBLE_DEVICES": str(self.gpu),
-                "HF_HOME": str(PROJECT_ROOT / ".cache/huggingface"),
-                "HF_HUB_CACHE": str(PROJECT_ROOT / ".cache/huggingface/hub"),
-                "TOKENIZERS_PARALLELISM": "false",
-            }
-        )
-        self.process = subprocess.Popen(self.command, env=environment, start_new_session=True)
-        base_url = f"http://127.0.0.1:{self.port}"
-        try:
-            wait_for_service(self.process, base_url, self.startup_timeout)
-        except BaseException:
-            self.stop()
-            raise
-        return base_url
-
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
-        self.stop()
-
-    def stop(self) -> None:
-        if self.process is None or self.process.poll() is not None:
-            return
-        try:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            self.process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                return
-            self.process.wait()
-
-
-def image_data_url(path: Path) -> str:
-    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
-
-def request_response(base_url: str, model: str, label: dict[str, object], timeout: float, max_tokens: int) -> str:
-    image_path = Path(str(label["image"]))
-    if not image_path.is_file():
-        raise ValueError(f"validation image does not exist: {image_path}")
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_data_url(image_path)}},
-                    {"type": "text", "text": str(label["prompt"])},
-                ],
-            }
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0,
-    }
-    request = Request(
-        f"{base_url}/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"vLLM request failed for {label['id']}: HTTP {exc.code}: {detail}") from exc
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"vLLM request failed for {label['id']}: {exc}") from exc
-    try:
-        content = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"vLLM response for {label['id']} did not contain a chat completion") from exc
-    if not isinstance(content, str):
-        raise RuntimeError(f"vLLM response for {label['id']} had a non-text completion")
-    return content
 
 
 def prepare_transformers_environment(gpu: int) -> None:
@@ -418,7 +187,6 @@ def infer_transformers_responses(
     args: argparse.Namespace,
     adapter: Path | None,
     adapter_source: str,
-    has_visual_lora: bool,
 ) -> tuple[dict[str, object], dict[str, object]]:
     validate_common_inference_args(args)
     prepare_transformers_environment(args.gpu)
@@ -434,7 +202,6 @@ def infer_transformers_responses(
         "model": str(config.model),
         "adapter": str(adapter) if adapter is not None else None,
         "adapter_source": adapter_source,
-        "adapter_has_visual_lora": has_visual_lora,
         "gpu": args.gpu,
         "max_tokens": args.max_tokens,
     }
@@ -442,30 +209,7 @@ def infer_transformers_responses(
 
 def infer_responses(config: TrainingConfig, labels: list[dict[str, object]], args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
     adapter, adapter_source = resolve_adapter(config, args.adapter)
-    has_visual_lora = adapter_uses_visual_lora(adapter)
-    backend = select_backend(args.backend, has_visual_lora)
-    if backend == "transformers":
-        return infer_transformers_responses(config, labels, args, adapter, adapter_source, has_visual_lora)
-
-    validate_automatic_args(args)
-    command, request_model, inference = vllm_command(config, args.port, adapter, adapter_source)
-    responses: dict[str, object] = {}
-    with TemporaryVllmService(command, args.port, args.startup_timeout, args.gpu) as base_url:
-        for index, label in enumerate(labels, start=1):
-            item_id = str(label["id"])
-            print(f"Evaluating {index}/{len(labels)}: {item_id}", flush=True)
-            responses[item_id] = request_response(base_url, request_model, label, args.request_timeout, args.max_tokens)
-    inference.update(
-        {
-            "backend": "vllm",
-            "adapter_has_visual_lora": has_visual_lora,
-            "gpu": args.gpu,
-            "port": args.port,
-            "max_tokens": args.max_tokens,
-            "request_timeout_seconds": args.request_timeout,
-        }
-    )
-    return responses, inference
+    return infer_transformers_responses(config, labels, args, adapter, adapter_source)
 
 
 def main() -> None:

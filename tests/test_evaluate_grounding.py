@@ -1,8 +1,9 @@
-"""Tests for bbox hit-rate scoring and failure handling."""
+"""Tests for bbox hit-rate scoring and Transformers evaluation behavior."""
 
 from __future__ import annotations
 
-import json
+from contextlib import redirect_stderr
+from io import StringIO
 import os
 import sys
 import tempfile
@@ -17,19 +18,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from evaluate_grounding import (  # noqa: E402
-    TemporaryVllmService,
-    adapter_uses_visual_lora,
     aggregate,
     default_report_path,
     infer_responses,
     infer_transformers_responses,
-    request_response,
+    parse_args,
     resolve_adapter,
     score_label,
-    select_backend,
     validate_adapter,
-    validate_automatic_args,
-    vllm_command,
+    validate_common_inference_args,
 )
 
 
@@ -89,17 +86,19 @@ class EvaluationTests(unittest.TestCase):
 
         self.assertEqual(report, Path("outputs/avantage/baseline/eval_0720_130405.json"))
 
-    def test_automatic_mode_rejects_the_production_port(self) -> None:
-        args = SimpleNamespace(gpu=1, port=18000, startup_timeout=1, request_timeout=1, max_tokens=1)
-
-        with self.assertRaisesRegex(ValueError, "reserved"):
-            validate_automatic_args(args)
-
-    def test_automatic_mode_rejects_negative_gpu(self) -> None:
-        args = SimpleNamespace(gpu=-1, port=18001, startup_timeout=1, request_timeout=1, max_tokens=1)
+    def test_transformers_inference_rejects_negative_gpu(self) -> None:
+        args = SimpleNamespace(gpu=-1, max_tokens=1)
 
         with self.assertRaisesRegex(ValueError, "non-negative"):
-            validate_automatic_args(args)
+            validate_common_inference_args(args)
+
+    def test_vllm_options_are_not_accepted(self) -> None:
+        for option in ("--backend", "--port", "--startup-timeout", "--request-timeout"):
+            with self.subTest(option=option), patch.object(sys, "argv", ["evaluate_grounding.py", option, "1"]):
+                with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
+                    parse_args()
+
+            self.assertEqual(error.exception.code, 2)
 
     def test_adapter_must_belong_to_the_selected_application(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -170,28 +169,6 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(resolved, explicit.resolve())
             self.assertEqual(source, "explicit_argument")
 
-    def test_visual_lora_detection_uses_peft_targets(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            adapter = Path(temporary_directory)
-            (adapter / "adapter_config.json").write_text(
-                json.dumps({"target_modules": ["q_proj", "visual.merger.mlp.2"]}), encoding="utf-8"
-            )
-
-            self.assertTrue(adapter_uses_visual_lora(adapter))
-
-    def test_language_only_lora_does_not_use_transformers_automatically(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            adapter = Path(temporary_directory)
-            (adapter / "adapter_config.json").write_text(json.dumps({"target_modules": ["q_proj"]}), encoding="utf-8")
-
-            self.assertFalse(adapter_uses_visual_lora(adapter))
-            self.assertEqual(select_backend("auto", False), "vllm")
-            self.assertEqual(select_backend("auto", True), "transformers")
-
-    def test_vllm_rejects_visual_lora(self) -> None:
-        with self.assertRaisesRegex(ValueError, "cannot apply"):
-            select_backend("vllm", True)
-
     @patch("evaluate_grounding.transformers_response", return_value="(10, 20)")
     @patch("evaluate_grounding.load_transformers_model")
     @patch("evaluate_grounding.prepare_transformers_environment")
@@ -207,9 +184,7 @@ class EvaluationTests(unittest.TestCase):
         mocked_loader.return_value = (MagicMock(), MagicMock(), MagicMock())
         label = {"id": "target", "image": "data/avantage/images/screen.png", "prompt": "Locate target"}
 
-        responses, inference = infer_transformers_responses(
-            config, [label], args, adapter, "config_run_name", True
-        )
+        responses, inference = infer_transformers_responses(config, [label], args, adapter, "config_run_name")
 
         mocked_environment.assert_called_once_with(1)
         mocked_loader.assert_called_once_with(config, adapter)
@@ -223,119 +198,48 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(responses, {"target": "(10, 20)"})
         self.assertEqual(inference["backend"], "transformers")
         self.assertEqual(inference["mode"], "transformers_lora")
-        self.assertTrue(inference["adapter_has_visual_lora"])
+        self.assertEqual(inference["adapter"], str(adapter))
+        self.assertEqual(inference["adapter_source"], "config_run_name")
+        self.assertEqual(inference["gpu"], 1)
+        self.assertEqual(inference["max_tokens"], 32)
 
-    def test_auto_backend_uses_transformers_for_visual_lora(self) -> None:
+    def test_automatic_inference_always_uses_transformers(self) -> None:
         config = SimpleNamespace(app_id="avantage", adapters=Path("outputs/avantage/v4_2/adapters"))
-        args = SimpleNamespace(adapter=None, backend="auto", gpu=1, max_tokens=32)
+        args = SimpleNamespace(adapter=None, gpu=1, max_tokens=32)
         adapter = Path("outputs/avantage/v4_2/adapters/best")
 
         with (
             patch("evaluate_grounding.resolve_adapter", return_value=(adapter, "config_run_name")),
-            patch("evaluate_grounding.adapter_uses_visual_lora", return_value=True),
             patch("evaluate_grounding.infer_transformers_responses", return_value=({}, {"backend": "transformers"})) as mocked_infer,
         ):
             _, inference = infer_responses(config, [], args)
 
-        mocked_infer.assert_called_once_with(config, [], args, adapter, "config_run_name", True)
+        mocked_infer.assert_called_once_with(config, [], args, adapter, "config_run_name")
         self.assertEqual(inference["backend"], "transformers")
 
-    def test_inference_records_adapter_selection(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            environment = root / "environment"
-            executable = environment / "bin" / "vllm"
-            executable.parent.mkdir(parents=True)
-            executable.write_text("", encoding="utf-8")
-            model = root / "model"
-            model.mkdir()
-            config = SimpleNamespace(app_id="avantage", model=model)
-
-            with patch("evaluate_grounding.CONDA_ENV", environment):
-                _, request_model, inference = vllm_command(config, 18001, None, "adapters_directory_missing")
-                _, lora_request_model, lora_inference = vllm_command(
-                    config, 18001, root / "adapter", "config_run_name"
-                )
-
-            self.assertEqual(request_model, "ui-tars-1.5-avantage-evaluation")
-            self.assertEqual(inference["mode"], "native")
-            self.assertIsNone(inference["adapter"])
-            self.assertEqual(inference["adapter_source"], "adapters_directory_missing")
-            self.assertEqual(lora_request_model, "avantage-grounding")
-            self.assertEqual(lora_inference["mode"], "lora")
-            self.assertEqual(lora_inference["adapter"], str(root / "adapter"))
-            self.assertEqual(lora_inference["adapter_source"], "config_run_name")
-
-    def test_request_response_sends_the_validation_image_and_prompt(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            image = Path(temporary_directory) / "screen.png"
-            image.write_bytes(b"not-a-real-png")
-            response = MagicMock()
-            response.read.return_value = json.dumps(
-                {"choices": [{"message": {"content": "(10, 20)"}}]}
-            ).encode("utf-8")
-            response.__enter__.return_value = response
-            label = {"id": "target", "image": str(image), "prompt": "Query:target\n"}
-
-            with patch("evaluate_grounding.urlopen", return_value=response) as mocked_urlopen:
-                completion = request_response("http://127.0.0.1:18001", "native", label, 10, 32)
-
-            request = mocked_urlopen.call_args.args[0]
-            payload = json.loads(request.data.decode("utf-8"))
-            self.assertEqual(completion, "(10, 20)")
-            self.assertEqual(payload["model"], "native")
-            self.assertEqual(payload["messages"][0]["content"][1]["text"], "Query:target\n")
-            self.assertTrue(payload["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,"))
-
-    @patch("evaluate_grounding.os.killpg")
-    @patch("evaluate_grounding.os.getpgid", return_value=123)
-    @patch("evaluate_grounding.wait_for_service")
-    @patch("evaluate_grounding.subprocess.Popen")
-    def test_temporary_service_stops_its_process_group(
+    @patch("evaluate_grounding.transformers_response", return_value="(10, 20)")
+    @patch("evaluate_grounding.load_transformers_model")
+    @patch("evaluate_grounding.prepare_transformers_environment")
+    def test_native_transformers_inference_records_native_metadata(
         self,
-        mocked_popen: MagicMock,
-        mocked_wait: MagicMock,
-        mocked_getpgid: MagicMock,
-        mocked_killpg: MagicMock,
+        mocked_environment: MagicMock,
+        mocked_loader: MagicMock,
+        mocked_response: MagicMock,
     ) -> None:
-        process = MagicMock()
-        process.pid = 123
-        process.poll.return_value = None
-        mocked_popen.return_value = process
+        config = SimpleNamespace(model=Path("models/UI-TARS-1.5-7B"))
+        args = SimpleNamespace(gpu=1, max_tokens=32)
+        mocked_loader.return_value = (MagicMock(), MagicMock(), MagicMock())
+        label = {"id": "target", "image": "data/avantage/images/screen.png", "prompt": "Locate target"}
 
-        with TemporaryVllmService(["vllm", "serve"], 18001, 5, 2) as base_url:
-            self.assertEqual(base_url, "http://127.0.0.1:18001")
+        _, inference = infer_transformers_responses(config, [label], args, None, "adapters_directory_missing")
 
-        mocked_wait.assert_called_once_with(process, "http://127.0.0.1:18001", 5)
-        self.assertEqual(mocked_popen.call_args.kwargs["env"]["CUDA_VISIBLE_DEVICES"], "2")
-        mocked_getpgid.assert_called_once_with(123)
-        mocked_killpg.assert_called_once()
-        process.wait.assert_called_once_with(timeout=30)
+        mocked_environment.assert_called_once_with(1)
+        mocked_loader.assert_called_once_with(config, None)
+        mocked_response.assert_called_once()
+        self.assertEqual(inference["mode"], "transformers_native")
+        self.assertIsNone(inference["adapter"])
+        self.assertEqual(inference["adapter_source"], "adapters_directory_missing")
 
-    @patch("evaluate_grounding.os.killpg")
-    @patch("evaluate_grounding.os.getpgid", return_value=123)
-    @patch("evaluate_grounding.wait_for_service", side_effect=RuntimeError("not ready"))
-    @patch("evaluate_grounding.subprocess.Popen")
-    def test_temporary_service_stops_when_startup_fails(
-        self,
-        mocked_popen: MagicMock,
-        mocked_wait: MagicMock,
-        mocked_getpgid: MagicMock,
-        mocked_killpg: MagicMock,
-    ) -> None:
-        process = MagicMock()
-        process.pid = 123
-        process.poll.return_value = None
-        mocked_popen.return_value = process
-
-        with self.assertRaisesRegex(RuntimeError, "not ready"):
-            with TemporaryVllmService(["vllm", "serve"], 18001, 5, 1):
-                pass
-
-        mocked_wait.assert_called_once()
-        mocked_getpgid.assert_called_once_with(123)
-        mocked_killpg.assert_called_once()
-        process.wait.assert_called_once_with(timeout=30)
 
 if __name__ == "__main__":
     unittest.main()

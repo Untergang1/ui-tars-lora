@@ -158,21 +158,15 @@ configuration.
 
 5. Evaluate the held-out validation set automatically. The command reads
    `processed/validation.jsonl`, sends each screenshot and grounding prompt to
-   the current run's `adapters/best` LoRA adapter, and scores the responses.
-   By default, language-only adapters run through an evaluation-only vLLM service
-   on GPU 1 and port 18001. Adapters that target `visual.*` modules run through
-   local Transformers/PEFT inference so vLLM cannot silently ignore their visual
-   LoRA weights:
+   the current run's `adapters/best` LoRA adapter, and scores the responses with
+   local Transformers/PEFT inference. Evaluation does not start a model service;
+   native models and all LoRA target modules, including `visual.*`, use the same
+   Transformers path:
 
    ```bash
    /root/autodl-tmp/xukefan/miniconda3/envs/ui-tars-lora/bin/python \
      scripts/evaluate_grounding.py --config configs/apps/<app_id>.yaml --gpu 1
    ```
-
-   Use `--backend vllm` or `--backend transformers` to override automatic
-   selection. vLLM rejects adapters with visual LoRA rather than evaluating them
-   with ignored weights. The Transformers backend does not start a service, so
-   `--port`, `--startup-timeout`, and `--request-timeout` apply only to vLLM.
 
    If `outputs/<app_id>/<run_name>/adapters/` does not exist, the same command
    evaluates the native UI-TARS model and records `adapter: null` plus the
@@ -197,13 +191,9 @@ configuration.
      --adapter "$(pwd)/outputs/<app_id>/<run_name>/adapters/best" --gpu 1
    ```
 
-   vLLM cannot serve visual LoRA targets, so use the Transformers evaluation
-   backend for adapters created with `vision_projector_lora: true`.
-
-   The vLLM backend rejects port 18000, which remains reserved for the
-   production service. Use `--gpu` to select any GPU index (including GPU 2)
-   when manually scheduling the workload. Use `--port`, `--startup-timeout`,
-   `--request-timeout`, or `--max-tokens` only when the defaults need adjustment.
+   Use `--gpu` to select any GPU index (including GPU 2) when manually
+   scheduling the workload. Use `--max-tokens` only when the default needs
+   adjustment.
 
 6. The report is written by default to
    `outputs/<app_id>/<run_name>/eval_MMDD_HHMMSS.json`, using UTC in the file
